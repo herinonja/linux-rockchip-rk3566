@@ -1,0 +1,56 @@
+name: Build Rockchip Kernel ARM64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison flex build-essential \
+            libssl-dev libelf-dev libncurses-dev \
+            dwarves pahole debhelper rsync python3 \
+            cpio xz-utils lz4 zstd \
+            crossbuild-essential-arm64 \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
+      - name: Prepare sources
+        run: |
+          make download
+          make extract
+          make patch
+
+      - name: Configure kernel
+        run: |
+          cd kernel-7.0.3/linux-7.0.3
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- inindev_defconfig
+
+      - name: Build kernel packages
+        run: |
+          cd kernel-7.0.3/linux-7.0.3
+          make -j$(nproc) \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            bindeb-pkg \
+            KBUILD_IMAGE=arch/arm64/boot/Image \
+            LOCALVERSION="-1-arm64"
+
+      - name: Collect artifacts
+        run: |
+          mkdir artifacts
+          find . -name "*.deb" -exec cp {} artifacts/ \;
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-arm64
+          path: artifacts/*.deb
