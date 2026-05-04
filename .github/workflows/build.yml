@@ -14,16 +14,21 @@ jobs:
       ARCH: arm64
       CROSS_COMPILE: aarch64-linux-gnu-
       CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 5G
 
     steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
+            git wget ca-certificates xz-utils patch \
             bc bison flex build-essential \
             libssl-dev libelf-dev libncurses-dev \
-            dwarves pahole ccache \
-            git wget xz-utils \
+            dwarves pahole ccache rsync python3 \
+            cpio lz4 zstd kmod \
             crossbuild-essential-arm64 \
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu
@@ -32,41 +37,77 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: ccache-${{ github.sha }}
+          key: ccache-rockchip-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            ccache-
+            ccache-rockchip-${{ runner.os }}-
 
-      - name: Download kernel
+      - name: Prepare ccache
+        run: |
+          ccache --set-config=max_size=5G
+          ccache --zero-stats
+          mkdir -p ~/.local/bin
+          ln -sf /usr/bin/ccache ~/.local/bin/aarch64-linux-gnu-gcc
+          ln -sf /usr/bin/ccache ~/.local/bin/aarch64-linux-gnu-g++
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Clone linux-rockchip v7.0.3
+        run: |
+          git clone --branch v7.0.3 --depth 1 https://github.com/inindev/linux-rockchip.git linux-rockchip
+
+      - name: Download Linux 7.0.3 source
         run: |
           wget https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.0.3.tar.xz
           tar -xf linux-7.0.3.tar.xz
 
-      - name: Clone patch repo
+      - name: Inspect patches
         run: |
-          git clone https://github.com/inindev/linux-rockchip.git
+          echo "Patch files found:"
+          find linux-rockchip/patches -type f | sort
 
-      - name: Apply patches
+      - name: Apply linux-rockchip patches
         run: |
           cd linux-7.0.3
-          for p in ../linux-rockchip/patches/*.patch; do
+
+          PATCHES=$(find ../linux-rockchip/patches -type f | sort)
+
+          if [ -z "$PATCHES" ]; then
+            echo "No patch files found."
+            exit 1
+          fi
+
+          for p in $PATCHES; do
+            echo "Applying $p"
             patch -p1 < "$p"
           done
 
-      - name: Configure kernel
+      - name: Configure kernel for Rockchip and Kodi GPU
         run: |
           cd linux-7.0.3
+
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
 
           scripts/config --enable DRM
+          scripts/config --enable DRM_KMS_HELPER
+          scripts/config --enable DRM_GEM_SHMEM_HELPER
+          scripts/config --enable DRM_SCHED
           scripts/config --enable DRM_ROCKCHIP
+
+          # RK3566 / Radxa Zero 3W / Mali G52
           scripts/config --module DRM_PANFROST
+
+          # Optional for newer Mali CSF GPUs, not primary for RK3566
           scripts/config --module DRM_PANTHOR
+
+          # Rockchip display / HDMI
+          scripts/config --enable PHY_ROCKCHIP_INNO_HDMI
+          scripts/config --enable ROCKCHIP_DW_HDMI
 
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
-      - name: Build kernel (no Debian packaging)
+      - name: Build kernel Image modules dtbs
         run: |
           cd linux-7.0.3
+
           make -j$(nproc) \
             ARCH=arm64 \
             CROSS_COMPILE="ccache aarch64-linux-gnu-" \
@@ -75,18 +116,32 @@ jobs:
       - name: Install modules to staging
         run: |
           cd linux-7.0.3
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            INSTALL_MOD_PATH=../modules modules_install
 
-      - name: Pack artifacts
+          make ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            INSTALL_MOD_PATH=${{ github.workspace }}/modules-staging \
+            modules_install
+
+      - name: Package artifacts
         run: |
-          mkdir artifacts
-          cp linux-7.0.3/arch/arm64/boot/Image artifacts/
-          cp -r linux-7.0.3/arch/arm64/boot/dts artifacts/
-          cp -r modules/lib artifacts/modules
+          mkdir -p artifacts/boot artifacts/modules
 
-      - name: Upload artifacts
+          cp linux-7.0.3/arch/arm64/boot/Image artifacts/boot/
+          cp -r linux-7.0.3/arch/arm64/boot/dts artifacts/boot/dts
+          cp -r modules-staging/lib/modules artifacts/modules/
+
+          tar -C artifacts -czf rockchip-kernel-7.0.3-arm64.tar.gz .
+
+          ls -lh rockchip-kernel-7.0.3-arm64.tar.gz
+
+      - name: Show ccache stats
+        if: always()
+        run: |
+          ccache --show-stats || true
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-arm64
-          path: artifacts/
+          name: rockchip-kernel-7.0.3-arm64
+          path: rockchip-kernel-7.0.3-arm64.tar.gz
+          retention-days: 7
