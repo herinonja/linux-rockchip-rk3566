@@ -14,20 +14,16 @@ jobs:
       ARCH: arm64
       CROSS_COMPILE: aarch64-linux-gnu-
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 5G
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
             bc bison flex build-essential \
             libssl-dev libelf-dev libncurses-dev \
-            dwarves pahole debhelper rsync python3 \
-            cpio xz-utils lz4 zstd ccache \
+            dwarves pahole ccache \
+            git wget xz-utils \
             crossbuild-essential-arm64 \
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu
@@ -36,74 +32,61 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: ccache-rockchip-${{ runner.os }}-${{ github.sha }}
+          key: ccache-${{ github.sha }}
           restore-keys: |
-            ccache-rockchip-${{ runner.os }}-
+            ccache-
 
-      - name: Prepare ccache
+      - name: Download kernel
         run: |
-          ccache --set-config=max_size=5G
-          ccache --zero-stats
-          mkdir -p ~/.local/bin
-          ln -sf /usr/bin/ccache ~/.local/bin/aarch64-linux-gnu-gcc
-          ln -sf /usr/bin/ccache ~/.local/bin/aarch64-linux-gnu-g++
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          wget https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.0.3.tar.xz
+          tar -xf linux-7.0.3.tar.xz
 
-      - name: Prepare sources
+      - name: Clone patch repo
         run: |
-          make download
-          make extract
-          make patch
+          git clone https://github.com/inindev/linux-rockchip.git
 
-      - name: Add Kodi GPU kernel config
+      - name: Apply patches
         run: |
-          cd kernel-7.0.3/linux-7.0.3
+          cd linux-7.0.3
+          for p in ../linux-rockchip/patches/*.patch; do
+            patch -p1 < "$p"
+          done
 
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- inindev_defconfig
+      - name: Configure kernel
+        run: |
+          cd linux-7.0.3
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
 
           scripts/config --enable DRM
-          scripts/config --enable DRM_KMS_HELPER
-          scripts/config --enable DRM_GEM_SHMEM_HELPER
-          scripts/config --enable DRM_SCHED
           scripts/config --enable DRM_ROCKCHIP
-
-          # Mali G52 / RK3566: important pour Radxa Zero 3W
           scripts/config --module DRM_PANFROST
-
-          # Mali récents Valhall/CSF: utile si tu testes panthor
           scripts/config --module DRM_PANTHOR
-
-          # Display / HDMI Rockchip
-          scripts/config --enable PHY_ROCKCHIP_INNO_HDMI
-          scripts/config --enable ROCKCHIP_DW_HDMI
 
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
-      - name: Build kernel packages
+      - name: Build kernel (no Debian packaging)
         run: |
-          cd kernel-7.0.3/linux-7.0.3
-
+          cd linux-7.0.3
           make -j$(nproc) \
             ARCH=arm64 \
             CROSS_COMPILE="ccache aarch64-linux-gnu-" \
-            bindeb-pkg \
-            KBUILD_IMAGE=arch/arm64/boot/Image \
-            LOCALVERSION="-1-arm64"
+            Image modules dtbs
 
-      - name: Show ccache stats
-        if: always()
+      - name: Install modules to staging
         run: |
-          ccache --show-stats || true
+          cd linux-7.0.3
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            INSTALL_MOD_PATH=../modules modules_install
 
-      - name: Collect artifacts
+      - name: Pack artifacts
         run: |
-          mkdir -p artifacts
-          find . -name "*.deb" -exec cp -v {} artifacts/ \;
-          ls -lh artifacts/
+          mkdir artifacts
+          cp linux-7.0.3/arch/arm64/boot/Image artifacts/
+          cp -r linux-7.0.3/arch/arm64/boot/dts artifacts/
+          cp -r modules/lib artifacts/modules
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rockchip-kernel-arm64
-          path: artifacts/*.deb
-          retention-days: 7
+          name: kernel-arm64
+          path: artifacts/
