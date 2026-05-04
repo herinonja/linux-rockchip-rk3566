@@ -8,8 +8,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - name: Clone repo
+        run: |
+          git clone https://github.com/inindev/linux-rockchip.git
+          cd linux-rockchip
 
       - name: Install dependencies
         run: |
@@ -23,20 +25,21 @@ jobs:
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu
 
-      - name: Prepare sources
+      - name: Download and patch kernel
         run: |
+          cd linux-rockchip
           make download
           make extract
           make patch
 
       - name: Configure kernel
         run: |
-          cd kernel-7.0.3/linux-7.0.3
+          cd linux-rockchip/kernel-7.0.3/linux-7.0.3
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- inindev_defconfig
 
-      - name: Build kernel packages
+      - name: Build kernel (no arch check)
         run: |
-          cd kernel-7.0.3/linux-7.0.3
+          cd linux-rockchip/kernel-7.0.3/linux-7.0.3
           make -j$(nproc) \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
