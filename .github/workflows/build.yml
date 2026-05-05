@@ -1,4 +1,4 @@
-name: Build Rockchip Kernel ARM64
+name: Build Radxa Zero 3W RK3566 Kernel
 
 on:
   workflow_dispatch:
@@ -15,6 +15,8 @@ jobs:
       CROSS_COMPILE: aarch64-linux-gnu-
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
+      KERNEL_VERSION: "7.0.3"
+      TARGET_DTB: "rk3566-radxa-zero-3w.dtb"
 
     steps:
       - name: Checkout workflow repo
@@ -37,9 +39,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: ccache-rockchip-${{ runner.os }}-${{ github.sha }}
+          key: ccache-radxa-zero3w-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            ccache-rockchip-${{ runner.os }}-
+            ccache-radxa-zero3w-${{ runner.os }}-
 
       - name: Prepare ccache
         run: |
@@ -59,15 +61,9 @@ jobs:
           wget https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.0.3.tar.xz
           tar -xf linux-7.0.3.tar.xz
 
-      - name: Inspect patches
-        run: |
-          echo "Patch files found:"
-          find linux-rockchip/patches -type f | sort
-
       - name: Apply linux-rockchip patches
         run: |
           cd linux-7.0.3
-
           PATCHES=$(find ../linux-rockchip/patches -type f | sort)
 
           if [ -z "$PATCHES" ]; then
@@ -80,27 +76,46 @@ jobs:
             patch -p1 < "$p"
           done
 
-      - name: Configure kernel for Rockchip and Kodi GPU
+      - name: Configure kernel for Radxa Zero 3W RK3566
         run: |
           cd linux-7.0.3
 
+          # Base ARM64 config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
 
+          # Rockchip platform
+          scripts/config --enable ARCH_ROCKCHIP
+          scripts/config --enable ARM64
+          scripts/config --enable OF
+          scripts/config --enable OF_OVERLAY
+
+          # DRM / display stack
           scripts/config --enable DRM
           scripts/config --enable DRM_KMS_HELPER
           scripts/config --enable DRM_GEM_SHMEM_HELPER
           scripts/config --enable DRM_SCHED
           scripts/config --enable DRM_ROCKCHIP
+          scripts/config --enable ROCKCHIP_DW_HDMI
+          scripts/config --enable PHY_ROCKCHIP_INNO_HDMI
 
-          # RK3566 / Radxa Zero 3W / Mali G52
+          # Mali GPU
+          # RK3566 / Mali G52 = Panfrost
           scripts/config --module DRM_PANFROST
 
-          # Optional for newer Mali CSF GPUs, not primary for RK3566
+          # Optional: Mali CSF/Valhall newer GPUs
           scripts/config --module DRM_PANTHOR
 
-          # Rockchip display / HDMI
-          scripts/config --enable PHY_ROCKCHIP_INNO_HDMI
-          scripts/config --enable ROCKCHIP_DW_HDMI
+          # Media / VPU helpers for Kodi-related stack
+          scripts/config --enable MEDIA_SUPPORT
+          scripts/config --module VIDEO_HANTRO
+          scripts/config --module VIDEO_ROCKCHIP_VDEC
+          scripts/config --module VIDEO_ROCKCHIP_RGA
+
+          # Filesystems usually useful on Armbian/DietPi
+          scripts/config --enable EXT4_FS
+          scripts/config --enable BTRFS_FS
+          scripts/config --enable VFAT_FS
+          scripts/config --enable EXFAT_FS
 
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
@@ -113,6 +128,19 @@ jobs:
             CROSS_COMPILE="ccache aarch64-linux-gnu-" \
             Image modules dtbs
 
+      - name: Verify Radxa Zero 3W DTB exists
+        run: |
+          DTB_PATH="linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}"
+
+          if [ ! -f "$DTB_PATH" ]; then
+            echo "Missing DTB: $DTB_PATH"
+            echo "Available rk3566 DTBs:"
+            find linux-7.0.3/arch/arm64/boot/dts/rockchip -name "rk3566*.dtb" | sort
+            exit 1
+          fi
+
+          echo "Found target DTB: $DTB_PATH"
+
       - name: Install modules to staging
         run: |
           cd linux-7.0.3
@@ -122,17 +150,40 @@ jobs:
             INSTALL_MOD_PATH=${{ github.workspace }}/modules-staging \
             modules_install
 
-      - name: Package artifacts
+      - name: Package Radxa Zero 3W kernel artifact
         run: |
-          mkdir -p artifacts/boot artifacts/modules
+          mkdir -p artifacts/boot/dtb/rockchip
+          mkdir -p artifacts/lib
 
-          cp linux-7.0.3/arch/arm64/boot/Image artifacts/boot/
-          cp -r linux-7.0.3/arch/arm64/boot/dts artifacts/boot/dts
-          cp -r modules-staging/lib/modules artifacts/modules/
+          cp linux-7.0.3/arch/arm64/boot/Image artifacts/boot/Image-7.0.3-radxa-zero3w
+          cp linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB} artifacts/boot/dtb/rockchip/
+          cp -r modules-staging/lib/modules artifacts/lib/
 
-          tar -C artifacts -czf rockchip-kernel-7.0.3-arm64.tar.gz .
+          cat > artifacts/install-radxa-zero3w.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
 
-          ls -lh rockchip-kernel-7.0.3-arm64.tar.gz
+          echo "Installing kernel Image..."
+          sudo cp boot/Image-7.0.3-radxa-zero3w /boot/
+
+          echo "Installing Radxa Zero 3W DTB..."
+          sudo mkdir -p /boot/dtb/rockchip
+          sudo cp boot/dtb/rockchip/rk3566-radxa-zero-3w.dtb /boot/dtb/rockchip/
+
+          echo "Installing modules..."
+          sudo cp -a lib/modules/* /lib/modules/
+
+          echo "Done."
+          echo "Now adapt /boot/armbianEnv.txt or your bootloader to use:"
+          echo "  Image-7.0.3-radxa-zero3w"
+          echo "  dtb/rockchip/rk3566-radxa-zero-3w.dtb"
+          EOF
+
+          chmod +x artifacts/install-radxa-zero3w.sh
+
+          tar -C artifacts -czf radxa-zero3w-kernel-7.0.3-arm64.tar.gz .
+
+          ls -lh radxa-zero3w-kernel-7.0.3-arm64.tar.gz
 
       - name: Show ccache stats
         if: always()
@@ -142,6 +193,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rockchip-kernel-7.0.3-arm64
-          path: rockchip-kernel-7.0.3-arm64.tar.gz
+          name: radxa-zero3w-kernel-7.0.3-arm64
+          path: radxa-zero3w-kernel-7.0.3-arm64.tar.gz
           retention-days: 7
