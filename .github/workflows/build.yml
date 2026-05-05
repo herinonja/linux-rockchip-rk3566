@@ -1,4 +1,4 @@
-name: Build Radxa Zero 3W RK3566 Kernel PRO DEB
+name: Build Radxa Zero 3W RK3566 Kernel
 
 on:
   workflow_dispatch:
@@ -16,6 +16,7 @@ jobs:
       CROSS_COMPILE: aarch64-linux-gnu-
       TARGET_DTB: rk3566-radxa-zero-3w.dtb
       IMAGE_PACKAGE: linux-image-radxa-zero3w-rk3566
+      HEADERS_PACKAGE: linux-headers-radxa-zero3w-rk3566
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
 
@@ -61,6 +62,14 @@ jobs:
             dkms dh-dkms dos2unix dh-exec \
             libc6:arm64 libgcc-s1:arm64
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-rk3566-${{ runner.os }}-${{ github.ref_name }}
+          restore-keys: |
+            ccache-rk3566-${{ runner.os }}-
+
       - name: Prepare ccache
         run: |
           ccache --set-config=max_size=5G
@@ -80,7 +89,14 @@ jobs:
         run: |
           cd linux-7.0.3
 
-          find ../linux-rockchip/patches -name "*.patch" | sort | while read -r patch_file; do
+          PATCH_DIR="../linux-rockchip/patches"
+
+          if [ ! -d "${PATCH_DIR}" ]; then
+            echo "Patch directory not found: ${PATCH_DIR}"
+            exit 1
+          fi
+
+          find "${PATCH_DIR}" -type f \( -name "*.patch" -o -name "*.diff" \) | sort | while read -r patch_file; do
             echo "Applying ${patch_file}"
             patch -p1 < "${patch_file}"
           done
@@ -91,6 +107,7 @@ jobs:
 
           make ARCH=arm64 CROSS_COMPILE="${CROSS_COMPILE}" defconfig
 
+          scripts/config --enable ARM64
           scripts/config --enable ARCH_ROCKCHIP
           scripts/config --enable OF
           scripts/config --enable OF_OVERLAY
@@ -150,6 +167,7 @@ jobs:
           scripts/config --enable DRM_GEM_SHMEM_HELPER
           scripts/config --enable DRM_SCHED
           scripts/config --module DRM_PANFROST
+          scripts/config --module DRM_PANTHOR
 
           scripts/config --module NF_CONNTRACK
           scripts/config --module NF_NAT
@@ -158,11 +176,19 @@ jobs:
           scripts/config --module IP_NF_NAT
           scripts/config --module NFT_CT
           scripts/config --module NFT_NAT
+          scripts/config --module BRIDGE
+          scripts/config --module BRIDGE_NETFILTER
+
+          scripts/config --enable MEDIA_SUPPORT
+          scripts/config --module VIDEO_HANTRO
+          scripts/config --module VIDEO_ROCKCHIP_VDEC
+          scripts/config --module VIDEO_ROCKCHIP_RGA
 
           scripts/config --enable SND
           scripts/config --enable SND_SOC
           scripts/config --enable SND_SOC_ROCKCHIP
           scripts/config --enable SND_SIMPLE_CARD
+          scripts/config --enable SND_AUDIO_GRAPH_CARD
           scripts/config --module SND_USB_AUDIO
 
           scripts/config --disable MSCC_PHY
@@ -187,6 +213,12 @@ jobs:
           echo "KERNEL_RELEASE=${KREL}" >> "${GITHUB_ENV}"
           echo "Kernel release: ${KREL}"
 
+      - name: Verify kernel outputs
+        run: |
+          test -f "linux-7.0.3/arch/arm64/boot/Image"
+          test -f "linux-7.0.3/.config"
+          test -f "linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}"
+
       - name: Install modules to staging
         run: |
           rm -rf modules-staging
@@ -199,31 +231,101 @@ jobs:
             INSTALL_MOD_PATH="${{ github.workspace }}/modules-staging" \
             modules_install
 
-      - name: Build kernel DEB
+      - name: Prepare headers staging
         run: |
           set -euo pipefail
 
-          rm -rf pkg artifacts
+          rm -rf headers-staging
+          mkdir -p "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}"
+
+          rsync -a \
+            --exclude='.git' \
+            --exclude='*.o' \
+            --exclude='*.ko' \
+            --exclude='*.cmd' \
+            --exclude='*.mod' \
+            --exclude='*.mod.c' \
+            linux-7.0.3/ "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}/"
+
+          cp linux-7.0.3/.config \
+            "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}/.config"
+
+          cp linux-7.0.3/Module.symvers \
+            "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}/Module.symvers"
+
+          cp linux-7.0.3/modules.order \
+            "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}/modules.order"
+
+      - name: Build headers DEB
+        run: |
+          set -euo pipefail
+
+          rm -rf headers-pkg artifacts
           mkdir -p artifacts
-          mkdir -p pkg/DEBIAN
-          mkdir -p pkg/boot/dtb/rockchip
-          mkdir -p pkg/lib
-          mkdir -p "pkg/usr/share/doc/${IMAGE_PACKAGE}"
+          mkdir -p headers-pkg/DEBIAN
+          mkdir -p headers-pkg/usr/src
+          mkdir -p "headers-pkg/usr/share/doc/${HEADERS_PACKAGE}"
+
+          cp -a "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}" \
+            headers-pkg/usr/src/
+
+          cat <<'EOF' > headers-pkg/DEBIAN/control
+          Package: __HEADERS_PACKAGE__
+          Version: __KERNEL_RELEASE__-1
+          Section: kernel
+          Priority: optional
+          Architecture: arm64
+          Maintainer: herinonja
+          Depends: build-essential, bc, bison, flex, libssl-dev, libelf-dev
+          Description: Kernel headers for Radxa Zero 3W RK3566
+           Provides headers for external modules and DKMS.
+          EOF
+
+          sed -i "s|__HEADERS_PACKAGE__|${HEADERS_PACKAGE}|g" headers-pkg/DEBIAN/control
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" headers-pkg/DEBIAN/control
+
+          cat <<'EOF' > "headers-pkg/usr/share/doc/${HEADERS_PACKAGE}/README.headers"
+          Kernel headers for external modules and DKMS.
+          EOF
+
+          dpkg-deb --build headers-pkg \
+            "artifacts/${HEADERS_PACKAGE}_${KERNEL_RELEASE}-1_arm64.deb"
+
+      - name: Build kernel image DEB
+        run: |
+          set -euo pipefail
+
+          rm -rf image-pkg
+          mkdir -p image-pkg/DEBIAN
+          mkdir -p image-pkg/boot/dtb/rockchip
+          mkdir -p image-pkg/lib
+          mkdir -p "image-pkg/usr/share/doc/${IMAGE_PACKAGE}"
 
           IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
 
           cp linux-7.0.3/arch/arm64/boot/Image \
-            "pkg/boot/${IMAGE_NAME}"
+            "image-pkg/boot/${IMAGE_NAME}"
 
           cp linux-7.0.3/.config \
-            "pkg/boot/config-${KERNEL_RELEASE}"
+            "image-pkg/boot/config-${KERNEL_RELEASE}"
 
           cp "linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}" \
-            "pkg/boot/dtb/rockchip/${TARGET_DTB}"
+            "image-pkg/boot/dtb/rockchip/${TARGET_DTB}"
 
-          cp -a modules-staging/lib/modules pkg/lib/
+          cp -a modules-staging/lib/modules image-pkg/lib/
 
-          cat <<'EOF' > pkg/DEBIAN/control
+          mkdir -p "image-pkg/lib/modules/${KERNEL_RELEASE}"
+
+          rm -f "image-pkg/lib/modules/${KERNEL_RELEASE}/build"
+          rm -f "image-pkg/lib/modules/${KERNEL_RELEASE}/source"
+
+          ln -s "/usr/src/linux-headers-${KERNEL_RELEASE}" \
+            "image-pkg/lib/modules/${KERNEL_RELEASE}/build"
+
+          ln -s "/usr/src/linux-headers-${KERNEL_RELEASE}" \
+            "image-pkg/lib/modules/${KERNEL_RELEASE}/source"
+
+          cat <<'EOF' > image-pkg/DEBIAN/control
           Package: __IMAGE_PACKAGE__
           Version: __KERNEL_RELEASE__-1
           Section: kernel
@@ -231,16 +333,17 @@ jobs:
           Architecture: arm64
           Maintainer: herinonja
           Depends: initramfs-tools
-          Recommends: aic8800-firmware, aic8800-sdio-dkms
-          Description: PRO Linux kernel image for Radxa Zero 3W RK3566
+          Recommends: __HEADERS_PACKAGE__ (= __KERNEL_RELEASE__-1), aic8800-firmware, aic8800-sdio-dkms
+          Description: Linux kernel image for Radxa Zero 3W RK3566
            Contains kernel Image, config, Radxa Zero 3W mainline DTB,
            matching modules, and automatic boot activation.
           EOF
 
-          sed -i "s|__IMAGE_PACKAGE__|${IMAGE_PACKAGE}|g" pkg/DEBIAN/control
-          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" pkg/DEBIAN/control
+          sed -i "s|__IMAGE_PACKAGE__|${IMAGE_PACKAGE}|g" image-pkg/DEBIAN/control
+          sed -i "s|__HEADERS_PACKAGE__|${HEADERS_PACKAGE}|g" image-pkg/DEBIAN/control
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" image-pkg/DEBIAN/control
 
-          cat <<'EOF' > pkg/DEBIAN/postinst
+          cat <<'EOF' > image-pkg/DEBIAN/postinst
           #!/bin/sh
           set -e
 
@@ -279,19 +382,15 @@ jobs:
           fi
 
           echo "Kernel activated."
-          echo "Recovery:"
-          echo "  ln -sf vmlinuz-6.1.115-vendor-rk35xx /mnt/emmc/boot/Image"
-          echo "  ln -sf uInitrd-6.1.115-vendor-rk35xx /mnt/emmc/boot/uInitrd"
-          echo "  cp -a /mnt/emmc/boot/armbianEnv.txt.backup-${BACKUP_TAG} /mnt/emmc/boot/armbianEnv.txt"
 
           exit 0
           EOF
 
-          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" pkg/DEBIAN/postinst
-          sed -i "s|__TARGET_DTB__|${TARGET_DTB}|g" pkg/DEBIAN/postinst
-          chmod 755 pkg/DEBIAN/postinst
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" image-pkg/DEBIAN/postinst
+          sed -i "s|__TARGET_DTB__|${TARGET_DTB}|g" image-pkg/DEBIAN/postinst
+          chmod 755 image-pkg/DEBIAN/postinst
 
-          cat <<'EOF' > pkg/DEBIAN/postrm
+          cat <<'EOF' > image-pkg/DEBIAN/postrm
           #!/bin/sh
           set -e
 
@@ -306,10 +405,10 @@ jobs:
           exit 0
           EOF
 
-          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" pkg/DEBIAN/postrm
-          chmod 755 pkg/DEBIAN/postrm
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" image-pkg/DEBIAN/postrm
+          chmod 755 image-pkg/DEBIAN/postrm
 
-          cat <<'EOF' > "pkg/usr/share/doc/${IMAGE_PACKAGE}/README.radxa-zero3w"
+          cat <<'EOF' > "image-pkg/usr/share/doc/${IMAGE_PACKAGE}/README.radxa-zero3w"
           This package automatically activates the custom kernel.
 
           It changes:
@@ -320,7 +419,7 @@ jobs:
           Backup files are created before modification.
           EOF
 
-          dpkg-deb --build pkg \
+          dpkg-deb --build image-pkg \
             "artifacts/${IMAGE_PACKAGE}_${KERNEL_RELEASE}-1_arm64.deb"
 
       - name: Build AIC8800 packages
@@ -332,13 +431,28 @@ jobs:
 
           make deb
 
-          find . -name "*.deb" -type f -exec cp -v {} ../artifacts/ \;
+          cd ..
 
-      - name: Generate checksums
+          echo "Generated AIC8800 debs:"
+          ls -lh aic8800*.deb aicrf-test*.deb 2>/dev/null || true
+
+          cp -v aic8800-sdio-dkms_*.deb artifacts/
+          cp -v aic8800-firmware_*.deb artifacts/
+          cp -v aicrf-test_*.deb artifacts/ || true
+
+      - name: Verify artifacts
         run: |
           cd artifacts
-          sha256sum *.deb > SHA256SUMS
+
+          echo "Final artifacts:"
           ls -lh
+
+          test -f linux-image-radxa-zero3w-rk3566_*.deb
+          test -f linux-headers-radxa-zero3w-rk3566_*.deb
+          test -f aic8800-sdio-dkms_*.deb
+          test -f aic8800-firmware_*.deb
+
+          sha256sum *.deb > SHA256SUMS
 
       - name: Show ccache stats
         if: always()
@@ -348,6 +462,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: radxa-zero3w-rk3566-kernel-pro-deb
+          name: radxa-zero3w-rk3566-kernel-deb
           path: artifacts/
           retention-days: 7
