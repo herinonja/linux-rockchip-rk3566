@@ -1,4 +1,4 @@
-name: Build Radxa Zero 3W RK3566 Kernel PRO DEB
+name: Build Radxa Zero 3W RK3566 Kernel
 
 on:
   workflow_dispatch:
@@ -14,15 +14,13 @@ jobs:
     env:
       ARCH: arm64
       CROSS_COMPILE: aarch64-linux-gnu-
-      KERNEL_VERSION: "7.0.3"
-      TARGET_DTB: "rk3566-radxa-zero-3w.dtb"
-      IMAGE_PACKAGE: "linux-image-radxa-zero3w-rk3566"
-      HEADERS_PACKAGE: "linux-headers-radxa-zero3w-rk3566"
+      TARGET_DTB: rk3566-radxa-zero-3w.dtb
+      IMAGE_PACKAGE: linux-image-radxa-zero3w-rk3566
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install dependencies
@@ -34,19 +32,10 @@ jobs:
             libssl-dev libelf-dev libncurses-dev \
             dwarves pahole ccache python3 \
             cpio lz4 zstd kmod fakeroot dpkg-dev \
-            gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             crossbuild-essential-arm64 \
             devscripts debhelper dh-make lintian \
-            dkms dh-dkms dos2unix
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: .ccache
-          key: ccache-rk3566-pro-${{ runner.os }}-${{ github.ref_name }}
-          restore-keys: |
-            ccache-rk3566-pro-${{ runner.os }}-
+            dkms dh-dkms dos2unix dh-exec
 
       - name: Prepare ccache
         run: |
@@ -66,50 +55,23 @@ jobs:
       - name: Apply patches
         run: |
           cd linux-7.0.3
-
-          PATCH_DIR="../linux-rockchip/patches"
-
-          if [ ! -d "$PATCH_DIR" ]; then
-            echo "Patch directory not found: $PATCH_DIR"
-            exit 1
-          fi
-
-          PATCHES=$(find "$PATCH_DIR" -type f \( -name "*.patch" -o -name "*.diff" \) | sort)
-
-          if [ -z "$PATCHES" ]; then
-            echo "No patch files found in $PATCH_DIR"
-            exit 1
-          fi
-
-          for p in $PATCHES; do
-            echo "Applying patch: $p"
-            patch -p1 < "$p"
+          find ../linux-rockchip/patches -name "*.patch" | sort | while read -r patch_file; do
+            echo "Applying ${patch_file}"
+            patch -p1 < "${patch_file}"
           done
 
-      - name: Configure kernel for RK3566 PRO
+      - name: Configure kernel
         run: |
           cd linux-7.0.3
 
-          make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} defconfig
+          make ARCH=arm64 CROSS_COMPILE="${CROSS_COMPILE}" defconfig
 
-          scripts/config --enable ARM64
           scripts/config --enable ARCH_ROCKCHIP
-          scripts/config --enable OF
-          scripts/config --enable OF_OVERLAY
-
           scripts/config --enable BLK_DEV_INITRD
           scripts/config --enable RD_GZIP
           scripts/config --enable RD_XZ
           scripts/config --enable RD_LZ4
           scripts/config --enable RD_ZSTD
-
-          scripts/config --enable EXT4_FS
-          scripts/config --enable BTRFS_FS
-          scripts/config --enable VFAT_FS
-          scripts/config --enable EXFAT_FS
-          scripts/config --enable TMPFS
-          scripts/config --enable DEVTMPFS
-          scripts/config --enable DEVTMPFS_MOUNT
 
           scripts/config --enable MMC
           scripts/config --enable MMC_BLOCK
@@ -118,102 +80,44 @@ jobs:
           scripts/config --enable MMC_SDHCI
           scripts/config --enable MMC_SDHCI_PLTFM
           scripts/config --enable MMC_SDHCI_OF_ARASAN
-          scripts/config --enable PHY_ROCKCHIP_EMMC
-
-          scripts/config --enable USB
-          scripts/config --enable USB_XHCI_HCD
-          scripts/config --enable USB_DWC3
-          scripts/config --enable USB_DWC3_OF_SIMPLE
-          scripts/config --enable USB_GADGET
-          scripts/config --enable USB_CONFIGFS
-          scripts/config --enable USB_CONFIGFS_ECM
-          scripts/config --enable USB_CONFIGFS_RNDIS
-          scripts/config --enable PHY_ROCKCHIP_INNO_USB2
-          scripts/config --enable PHY_ROCKCHIP_TYPEC
-          scripts/config --enable PHY_ROCKCHIP_NANENG_COMBO_PHY
-
-          scripts/config --enable NET
-          scripts/config --enable INET
-          scripts/config --enable ETHERNET
-          scripts/config --enable STMMAC_ETH
-          scripts/config --enable DWMAC_ROCKCHIP
-          scripts/config --enable PHYLIB
 
           scripts/config --module CFG80211
           scripts/config --module MAC80211
           scripts/config --module RFKILL
           scripts/config --module BT
           scripts/config --module BT_HCIUART
-          scripts/config --module BT_HCIUART_H4
-          scripts/config --module BT_HCIUART_3WIRE
           scripts/config --module BT_HCIBTUSB
+
+          scripts/config --enable DRM
+          scripts/config --enable DRM_ROCKCHIP
+          scripts/config --module DRM_PANFROST
 
           scripts/config --module NF_CONNTRACK
           scripts/config --module NF_NAT
           scripts/config --module IP_NF_IPTABLES
-          scripts/config --module IP_NF_FILTER
           scripts/config --module IP_NF_NAT
-          scripts/config --module NFT_CT
-          scripts/config --module NFT_NAT
-          scripts/config --module BRIDGE
-          scripts/config --module BRIDGE_NETFILTER
-
-          scripts/config --enable DRM
-          scripts/config --enable DRM_KMS_HELPER
-          scripts/config --enable DRM_GEM_SHMEM_HELPER
-          scripts/config --enable DRM_SCHED
-          scripts/config --enable DRM_ROCKCHIP
-          scripts/config --enable ROCKCHIP_DW_HDMI
-          scripts/config --enable PHY_ROCKCHIP_INNO_HDMI
-          scripts/config --module DRM_PANFROST
-          scripts/config --module DRM_PANTHOR
-
-          scripts/config --enable MEDIA_SUPPORT
-          scripts/config --module VIDEO_HANTRO
-          scripts/config --module VIDEO_ROCKCHIP_VDEC
-          scripts/config --module VIDEO_ROCKCHIP_RGA
-
-          scripts/config --enable SND
-          scripts/config --enable SND_SOC
-          scripts/config --enable SND_SOC_ROCKCHIP
-          scripts/config --enable SND_SIMPLE_CARD
-          scripts/config --enable SND_AUDIO_GRAPH_CARD
-          scripts/config --module SND_USB_AUDIO
 
           scripts/config --disable MSCC_PHY
           scripts/config --disable USB_XHCI_RCAR
           scripts/config --disable USB_XHCI_TEGRA
 
-          make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} olddefconfig
+          make ARCH=arm64 CROSS_COMPILE="${CROSS_COMPILE}" olddefconfig
 
-      - name: Build kernel Image modules dtbs
+      - name: Build kernel, modules and target DTB only
         run: |
           cd linux-7.0.3
 
           make -j"$(nproc)" \
             ARCH=arm64 \
             CROSS_COMPILE="ccache aarch64-linux-gnu-" \
-            Image modules dtbs
+            Image modules rockchip/${TARGET_DTB}
 
       - name: Get kernel release
         run: |
           cd linux-7.0.3
-          KREL=$(make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} kernelrelease)
-          echo "KERNEL_RELEASE=$KREL" >> "$GITHUB_ENV"
-          echo "Kernel release: $KREL"
-
-      - name: Verify required outputs
-        run: |
-          test -f "linux-7.0.3/arch/arm64/boot/Image"
-          test -f "linux-7.0.3/.config"
-
-          DTB_PATH="linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}"
-
-          if [ ! -f "$DTB_PATH" ]; then
-            echo "Missing DTB: $DTB_PATH"
-            find linux-7.0.3/arch/arm64/boot/dts/rockchip -name "rk3566*.dtb" | sort
-            exit 1
-          fi
+          KREL="$(make ARCH=arm64 CROSS_COMPILE="${CROSS_COMPILE}" kernelrelease)"
+          echo "KERNEL_RELEASE=${KREL}" >> "${GITHUB_ENV}"
+          echo "Kernel release: ${KREL}"
 
       - name: Install modules to staging
         run: |
@@ -223,135 +127,58 @@ jobs:
           cd linux-7.0.3
 
           make ARCH=arm64 \
-            CROSS_COMPILE=${CROSS_COMPILE} \
+            CROSS_COMPILE="${CROSS_COMPILE}" \
             INSTALL_MOD_PATH="${{ github.workspace }}/modules-staging" \
             modules_install
 
-      - name: Prepare headers staging
+      - name: Build kernel DEB
         run: |
           set -euo pipefail
 
-          rm -rf headers-staging
-          mkdir -p "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}"
-
-          rsync -a \
-            --exclude='.git' \
-            --exclude='*.o' \
-            --exclude='*.ko' \
-            --exclude='*.cmd' \
-            --exclude='*.mod' \
-            --exclude='*.mod.c' \
-            linux-7.0.3/ "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}/"
-
-          cp linux-7.0.3/.config \
-            "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}/.config"
-
-          cp linux-7.0.3/Module.symvers \
-            "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}/Module.symvers"
-
-          cp linux-7.0.3/modules.order \
-            "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}/modules.order"
-
-      - name: Create headers Debian package
-        run: |
-          set -euo pipefail
-
-          PKGDIR="headers-deb"
-          ROOT="${PKGDIR}/root"
-          DEBIAN="${ROOT}/DEBIAN"
-
-          rm -rf "${PKGDIR}" artifacts
-          mkdir -p "${DEBIAN}"
-          mkdir -p "${ROOT}/usr/src"
-          mkdir -p "${ROOT}/usr/share/doc/${HEADERS_PACKAGE}"
+          rm -rf pkg artifacts
           mkdir -p artifacts
-
-          cp -a "headers-staging/usr/src/linux-headers-${KERNEL_RELEASE}" \
-            "${ROOT}/usr/src/"
-
-          cat > "${DEBIAN}/control" <<EOF
-          Package: ${HEADERS_PACKAGE}
-          Version: ${KERNEL_RELEASE}-1
-          Section: kernel
-          Priority: optional
-          Architecture: arm64
-          Maintainer: herinonja
-          Depends: build-essential, bc, bison, flex, libssl-dev, libelf-dev
-          Description: Kernel headers for Radxa Zero 3W RK3566 kernel
-           Provides headers for external modules and DKMS,
-           including AIC8800 SDIO WiFi driver builds.
-          EOF
-
-          cat > "${ROOT}/usr/share/doc/${HEADERS_PACKAGE}/README.headers" <<EOF
-          Headers for kernel ${KERNEL_RELEASE}.
-
-          DKMS modules should use:
-            /lib/modules/${KERNEL_RELEASE}/build
-          EOF
-
-          dpkg-deb --build "${ROOT}" \
-            "artifacts/${HEADERS_PACKAGE}_${KERNEL_RELEASE}-1_arm64.deb"
-
-      - name: Create image Debian package with automatic activation
-        run: |
-          set -euo pipefail
-
-          PKGDIR="image-deb"
-          ROOT="${PKGDIR}/root"
-          DEBIAN="${ROOT}/DEBIAN"
-
-          rm -rf "${PKGDIR}"
-          mkdir -p "${DEBIAN}"
-          mkdir -p "${ROOT}/boot/dtb/rockchip"
-          mkdir -p "${ROOT}/usr/share/doc/${IMAGE_PACKAGE}"
-          mkdir -p "${ROOT}/lib"
+          mkdir -p pkg/DEBIAN
+          mkdir -p pkg/boot/dtb/rockchip
+          mkdir -p pkg/lib
+          mkdir -p pkg/usr/share/doc/${IMAGE_PACKAGE}
 
           IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
 
-          cp "linux-7.0.3/arch/arm64/boot/Image" \
-            "${ROOT}/boot/${IMAGE_NAME}"
+          cp linux-7.0.3/arch/arm64/boot/Image \
+            "pkg/boot/${IMAGE_NAME}"
 
-          cp "linux-7.0.3/.config" \
-            "${ROOT}/boot/config-${KERNEL_RELEASE}"
+          cp linux-7.0.3/.config \
+            "pkg/boot/config-${KERNEL_RELEASE}"
 
           cp "linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}" \
-            "${ROOT}/boot/dtb/rockchip/${TARGET_DTB}"
+            "pkg/boot/dtb/rockchip/${TARGET_DTB}"
 
-          cp -a "modules-staging/lib/modules" "${ROOT}/lib/modules"
+          cp -a modules-staging/lib/modules pkg/lib/
 
-          mkdir -p "${ROOT}/lib/modules/${KERNEL_RELEASE}"
-
-          rm -f "${ROOT}/lib/modules/${KERNEL_RELEASE}/build"
-          rm -f "${ROOT}/lib/modules/${KERNEL_RELEASE}/source"
-
-          ln -s "/usr/src/linux-headers-${KERNEL_RELEASE}" \
-            "${ROOT}/lib/modules/${KERNEL_RELEASE}/build"
-
-          ln -s "/usr/src/linux-headers-${KERNEL_RELEASE}" \
-            "${ROOT}/lib/modules/${KERNEL_RELEASE}/source"
-
-          cat > "${DEBIAN}/control" <<EOF
-          Package: ${IMAGE_PACKAGE}
-          Version: ${KERNEL_RELEASE}-1
+          cat <<'EOF' > pkg/DEBIAN/control
+          Package: __IMAGE_PACKAGE__
+          Version: __KERNEL_RELEASE__-1
           Section: kernel
           Priority: optional
           Architecture: arm64
           Maintainer: herinonja
           Depends: initramfs-tools
-          Recommends: ${HEADERS_PACKAGE} (= ${KERNEL_RELEASE}-1), aic8800-firmware, aic8800-sdio-dkms
-          Description: PRO Linux kernel image for Radxa Zero 3W RK3566
+          Recommends: aic8800-firmware, aic8800-sdio-dkms
+          Description: Linux kernel image for Radxa Zero 3W RK3566
            Contains kernel Image, config, Radxa Zero 3W mainline DTB,
-           kernel modules, and DKMS-compatible module links.
-           This package automatically activates the kernel in /boot.
+           matching modules, and automatic boot activation.
           EOF
 
-          cat > "${DEBIAN}/postinst" <<'EOF'
+          sed -i "s|__IMAGE_PACKAGE__|${IMAGE_PACKAGE}|g" pkg/DEBIAN/control
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" pkg/DEBIAN/control
+
+          cat <<'EOF' > pkg/DEBIAN/postinst
           #!/bin/sh
           set -e
 
           KERNEL_RELEASE="__KERNEL_RELEASE__"
           IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
-          DTB_NAME="rk3566-radxa-zero-3w.dtb"
+          DTB_NAME="__TARGET_DTB__"
           BACKUP_TAG="before-rk3566-${KERNEL_RELEASE}"
 
           echo "Installed kernel files:"
@@ -360,11 +187,9 @@ jobs:
           echo "  /boot/dtb/rockchip/${DTB_NAME}"
           echo "  /lib/modules/${KERNEL_RELEASE}"
 
-          echo "Running depmod..."
           depmod "${KERNEL_RELEASE}" || true
 
           if command -v update-initramfs >/dev/null 2>&1; then
-            echo "Generating initramfs..."
             update-initramfs -c -k "${KERNEL_RELEASE}" || true
           fi
 
@@ -383,18 +208,10 @@ jobs:
             else
               echo "fdtfile=rockchip/${DTB_NAME}" >> /boot/armbianEnv.txt
             fi
-          else
-            echo "WARNING: /boot/armbianEnv.txt not found."
           fi
 
-          echo
-          echo "Kernel activated automatically."
-          echo "Current boot targets:"
-          echo "  /boot/Image -> ${IMAGE_NAME}"
-          echo "  /boot/uInitrd -> uInitrd-${KERNEL_RELEASE}"
-          echo "  fdtfile=rockchip/${DTB_NAME}"
-          echo
-          echo "Recovery from mounted eMMC:"
+          echo "Kernel activated."
+          echo "Recovery:"
           echo "  ln -sf vmlinuz-6.1.115-vendor-rk35xx /mnt/emmc/boot/Image"
           echo "  ln -sf uInitrd-6.1.115-vendor-rk35xx /mnt/emmc/boot/uInitrd"
           echo "  cp -a /mnt/emmc/boot/armbianEnv.txt.backup-${BACKUP_TAG} /mnt/emmc/boot/armbianEnv.txt"
@@ -402,10 +219,11 @@ jobs:
           exit 0
           EOF
 
-          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" "${DEBIAN}/postinst"
-          chmod 755 "${DEBIAN}/postinst"
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" pkg/DEBIAN/postinst
+          sed -i "s|__TARGET_DTB__|${TARGET_DTB}|g" pkg/DEBIAN/postinst
+          chmod 755 pkg/DEBIAN/postinst
 
-          cat > "${DEBIAN}/postrm" <<'EOF'
+          cat <<'EOF' > pkg/DEBIAN/postrm
           #!/bin/sh
           set -e
 
@@ -420,30 +238,24 @@ jobs:
           exit 0
           EOF
 
-          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" "${DEBIAN}/postrm"
-          chmod 755 "${DEBIAN}/postrm"
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" pkg/DEBIAN/postrm
+          chmod 755 pkg/DEBIAN/postrm
 
-          cat > "${ROOT}/usr/share/doc/${IMAGE_PACKAGE}/README.radxa-zero3w" <<EOF
-          This package automatically activates:
-            /boot/Image -> Image-${KERNEL_RELEASE}-radxa-zero3w
-            /boot/uInitrd -> uInitrd-${KERNEL_RELEASE}
-            fdtfile=rockchip/rk3566-radxa-zero-3w.dtb
+          cat <<'EOF' > pkg/usr/share/doc/${IMAGE_PACKAGE}/README.radxa-zero3w
+          This package automatically activates the custom kernel.
 
-          Backup files are created as:
-            /boot/Image.backup-before-rk3566-${KERNEL_RELEASE}
-            /boot/uInitrd.backup-before-rk3566-${KERNEL_RELEASE}
-            /boot/armbianEnv.txt.backup-before-rk3566-${KERNEL_RELEASE}
+          It changes:
+            /boot/Image
+            /boot/uInitrd
+            fdtfile in /boot/armbianEnv.txt
 
-          AIC8800 WiFi on Radxa Zero 3W requires:
-            aic8800-firmware
-            aic8800-sdio-dkms
-            ${HEADERS_PACKAGE}
+          Backup files are created before modification.
           EOF
 
-          dpkg-deb --build "${ROOT}" \
+          dpkg-deb --build pkg \
             "artifacts/${IMAGE_PACKAGE}_${KERNEL_RELEASE}-1_arm64.deb"
 
-      - name: Build Radxa AIC8800 firmware and SDIO DKMS packages
+      - name: Build AIC8800 packages
         run: |
           set -euo pipefail
 
@@ -454,34 +266,20 @@ jobs:
 
           find . -name "*.deb" -type f -exec cp -v {} ../artifacts/ \;
 
-      - name: Generate checksums and show artifacts
+      - name: Generate checksums
         run: |
           cd artifacts
           sha256sum *.deb > SHA256SUMS
-
-          echo "Generated artifacts:"
           ls -lh
-
-          echo
-          echo "Kernel image package preview:"
-          dpkg-deb -c ${IMAGE_PACKAGE}_*.deb | head -120
-
-          echo
-          echo "Kernel headers package preview:"
-          dpkg-deb -c ${HEADERS_PACKAGE}_*.deb | head -80
-
-          echo
-          echo "AIC8800 packages:"
-          ls -lh *aic8800*.deb || true
 
       - name: Show ccache stats
         if: always()
         run: |
           ccache --show-stats || true
 
-      - name: Upload DEB artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: radxa-zero3w-rk3566-kernel-pro-deb
+          name: radxa-zero3w-rk3566-kernel
           path: artifacts/
           retention-days: 7
