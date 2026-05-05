@@ -15,7 +15,7 @@ jobs:
       ARCH: arm64
       CROSS_COMPILE: aarch64-linux-gnu-
       KERNEL_VERSION: "7.0.3"
-      TARGET_DTB: "rk3566-radxa-zero-3w.dtb"
+      TARGET_DTB: "rk3566-radxa-zero3.dtb"
       PACKAGE_NAME: "linux-image-radxa-zero3w-rk3566"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
@@ -83,17 +83,71 @@ jobs:
             patch -p1 < "$p"
           done
 
-      - name: Configure kernel
+      - name: Configure kernel for RK3566
         run: |
           cd linux-7.0.3
 
           make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} defconfig
 
-          scripts/config --enable ARCH_ROCKCHIP
+          # Core platform
           scripts/config --enable ARM64
+          scripts/config --enable ARCH_ROCKCHIP
           scripts/config --enable OF
           scripts/config --enable OF_OVERLAY
 
+          # Initramfs support
+          scripts/config --enable BLK_DEV_INITRD
+          scripts/config --enable RD_GZIP
+          scripts/config --enable RD_XZ
+          scripts/config --enable RD_LZ4
+          scripts/config --enable RD_ZSTD
+
+          # Filesystems
+          scripts/config --enable EXT4_FS
+          scripts/config --enable BTRFS_FS
+          scripts/config --enable VFAT_FS
+          scripts/config --enable EXFAT_FS
+          scripts/config --enable TMPFS
+          scripts/config --enable DEVTMPFS
+          scripts/config --enable DEVTMPFS_MOUNT
+
+          # Rockchip storage / MMC / SD / eMMC
+          scripts/config --enable MMC
+          scripts/config --enable MMC_BLOCK
+          scripts/config --enable MMC_DW
+          scripts/config --enable MMC_DW_ROCKCHIP
+          scripts/config --enable MMC_SDHCI
+          scripts/config --enable MMC_SDHCI_OF_ARASAN
+          scripts/config --enable PHY_ROCKCHIP_EMMC
+
+          # USB for RK3566
+          scripts/config --enable USB
+          scripts/config --enable USB_XHCI_HCD
+          scripts/config --enable USB_DWC3
+          scripts/config --enable USB_DWC3_OF_SIMPLE
+          scripts/config --enable PHY_ROCKCHIP_INNO_USB2
+          scripts/config --enable PHY_ROCKCHIP_TYPEC
+          scripts/config --enable PHY_ROCKCHIP_NANENG_COMBO_PHY
+
+          # Networking basics
+          scripts/config --enable NET
+          scripts/config --enable INET
+          scripts/config --enable ETHERNET
+          scripts/config --enable STMMAC_ETH
+          scripts/config --enable DWMAC_ROCKCHIP
+          scripts/config --enable PHYLIB
+
+          # Wi-Fi / Bluetooth stack as modules
+          scripts/config --module CFG80211
+          scripts/config --module MAC80211
+          scripts/config --module RFKILL
+          scripts/config --module BT
+          scripts/config --module BT_HCIUART
+          scripts/config --module BT_HCIUART_H4
+          scripts/config --module BT_HCIUART_3WIRE
+          scripts/config --module BT_HCIBTUSB
+
+          # DRM / GPU / Display
           scripts/config --enable DRM
           scripts/config --enable DRM_KMS_HELPER
           scripts/config --enable DRM_GEM_SHMEM_HELPER
@@ -101,23 +155,30 @@ jobs:
           scripts/config --enable DRM_ROCKCHIP
           scripts/config --enable ROCKCHIP_DW_HDMI
           scripts/config --enable PHY_ROCKCHIP_INNO_HDMI
-
           scripts/config --module DRM_PANFROST
           scripts/config --module DRM_PANTHOR
 
+          # Media / VPU
           scripts/config --enable MEDIA_SUPPORT
           scripts/config --module VIDEO_HANTRO
           scripts/config --module VIDEO_ROCKCHIP_VDEC
           scripts/config --module VIDEO_ROCKCHIP_RGA
 
-          scripts/config --enable EXT4_FS
-          scripts/config --enable BTRFS_FS
-          scripts/config --enable VFAT_FS
-          scripts/config --enable EXFAT_FS
+          # Audio
+          scripts/config --enable SND
+          scripts/config --enable SND_SOC
+          scripts/config --enable SND_SOC_ROCKCHIP
+          scripts/config --enable SND_SIMPLE_CARD
+          scripts/config --enable SND_AUDIO_GRAPH_CARD
+
+          # Disable non-RK3566 firmware-demanding drivers
+          scripts/config --disable MSCC_PHY
+          scripts/config --disable USB_XHCI_RCAR
+          scripts/config --disable USB_XHCI_TEGRA
 
           make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} olddefconfig
 
-      - name: Build kernel Image modules and target DTB
+      - name: Build kernel Image modules dtbs
         run: |
           cd linux-7.0.3
 
@@ -136,6 +197,7 @@ jobs:
       - name: Verify required outputs
         run: |
           test -f "linux-7.0.3/arch/arm64/boot/Image"
+          test -f "linux-7.0.3/.config"
 
           DTB_PATH="linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}"
 
@@ -145,6 +207,10 @@ jobs:
             find linux-7.0.3/arch/arm64/boot/dts/rockchip -name "rk3566*.dtb" | sort
             exit 1
           fi
+
+          echo "Kernel Image OK"
+          echo "Kernel config OK"
+          echo "Target DTB OK: $DTB_PATH"
 
       - name: Install modules to package root
         run: |
@@ -166,21 +232,27 @@ jobs:
           ROOT="${PKGDIR}/root"
           DEBIAN="${ROOT}/DEBIAN"
 
-          rm -rf "${PKGDIR}"
+          rm -rf "${PKGDIR}" artifacts
           mkdir -p "${DEBIAN}"
           mkdir -p "${ROOT}/boot/dtb/rockchip"
           mkdir -p "${ROOT}/usr/share/doc/${PACKAGE_NAME}"
+          mkdir -p "${ROOT}/lib"
 
           IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
 
           cp "linux-7.0.3/arch/arm64/boot/Image" \
             "${ROOT}/boot/${IMAGE_NAME}"
 
+          cp "linux-7.0.3/.config" \
+            "${ROOT}/boot/config-${KERNEL_RELEASE}"
+
           cp "linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}" \
             "${ROOT}/boot/dtb/rockchip/${TARGET_DTB}"
 
-          mkdir -p "${ROOT}/lib"
           cp -a "pkgroot/lib/modules" "${ROOT}/lib/modules"
+
+          find "${ROOT}/lib/modules/${KERNEL_RELEASE}" -name build -type l -delete || true
+          find "${ROOT}/lib/modules/${KERNEL_RELEASE}" -name source -type l -delete || true
 
           cat > "${DEBIAN}/control" <<EOF
           Package: ${PACKAGE_NAME}
@@ -190,8 +262,9 @@ jobs:
           Architecture: arm64
           Maintainer: herinonja
           Description: Minimal Linux kernel package for Radxa Zero 3W RK3566
-           Contains only the kernel Image, Radxa Zero 3W RK3566 DTB,
+           Contains only the kernel Image, kernel config, Radxa Zero 3 RK3566 DTB,
            and matching kernel modules.
+           This package does not modify /boot/armbianEnv.txt.
           EOF
 
           cat > "${DEBIAN}/postinst" <<'EOF'
@@ -200,7 +273,13 @@ jobs:
 
           KERNEL_RELEASE="__KERNEL_RELEASE__"
           IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
-          DTB_NAME="rk3566-radxa-zero-3w.dtb"
+          DTB_NAME="rk3566-radxa-zero3.dtb"
+
+          echo "Installed kernel files:"
+          echo "  /boot/${IMAGE_NAME}"
+          echo "  /boot/config-${KERNEL_RELEASE}"
+          echo "  /boot/dtb/rockchip/${DTB_NAME}"
+          echo "  /lib/modules/${KERNEL_RELEASE}"
 
           echo "Running depmod for ${KERNEL_RELEASE}..."
           depmod "${KERNEL_RELEASE}" || true
@@ -210,30 +289,26 @@ jobs:
             update-initramfs -c -k "${KERNEL_RELEASE}" || true
           fi
 
-          if [ -f /boot/armbianEnv.txt ]; then
-            echo "Updating /boot/armbianEnv.txt..."
-            cp -a /boot/armbianEnv.txt "/boot/armbianEnv.txt.backup.${KERNEL_RELEASE}" || true
+          echo
+          echo "IMPORTANT:"
+          echo "This package did NOT modify /boot/armbianEnv.txt."
+          echo
+          echo "Your current working Armbian setup likely uses:"
+          echo "  /boot/Image -> vmlinuz-*"
+          echo "  /boot/uInitrd -> uInitrd-*"
+          echo "  fdtfile=rockchip/${DTB_NAME}"
+          echo
+          echo "To test this kernel manually, backup current symlinks first:"
+          echo "  sudo cp -a /boot/Image /boot/Image.backup-working"
+          echo "  sudo cp -a /boot/uInitrd /boot/uInitrd.backup-working"
+          echo
+          echo "Then switch symlinks:"
+          echo "  sudo ln -sf ${IMAGE_NAME} /boot/Image"
+          echo "  sudo ln -sf uInitrd-${KERNEL_RELEASE} /boot/uInitrd"
+          echo
+          echo "Do not change /boot/armbianEnv.txt unless necessary."
 
-            if grep -q '^image=' /boot/armbianEnv.txt; then
-              sed -i "s|^image=.*|image=${IMAGE_NAME}|" /boot/armbianEnv.txt
-            else
-              echo "image=${IMAGE_NAME}" >> /boot/armbianEnv.txt
-            fi
-
-            if grep -q '^fdtfile=' /boot/armbianEnv.txt; then
-              sed -i "s|^fdtfile=.*|fdtfile=rockchip/${DTB_NAME}|" /boot/armbianEnv.txt
-            else
-              echo "fdtfile=rockchip/${DTB_NAME}" >> /boot/armbianEnv.txt
-            fi
-          else
-            echo "WARNING: /boot/armbianEnv.txt not found."
-            echo "Set manually:"
-            echo "  image=${IMAGE_NAME}"
-            echo "  fdtfile=rockchip/${DTB_NAME}"
-          fi
-
-          echo "Kernel installed."
-          echo "Reboot with: sudo reboot"
+          exit 0
           EOF
 
           sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" "${DEBIAN}/postinst"
@@ -257,8 +332,25 @@ jobs:
           sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" "${DEBIAN}/postrm"
           chmod 755 "${DEBIAN}/postrm"
 
-          find "${ROOT}/lib/modules/${KERNEL_RELEASE}" -name build -type l -delete || true
-          find "${ROOT}/lib/modules/${KERNEL_RELEASE}" -name source -type l -delete || true
+          cat > "${ROOT}/usr/share/doc/${PACKAGE_NAME}/armbianEnv.example" <<EOF
+          # Example only. Do NOT copy blindly.
+          #
+          # Current known-good setup:
+          #   fdtfile=rockchip/rk3566-radxa-zero3.dtb
+          #
+          # This package intentionally does NOT modify /boot/armbianEnv.txt.
+          #
+          # Manual test method:
+          #   sudo cp -a /boot/Image /boot/Image.backup-working
+          #   sudo cp -a /boot/uInitrd /boot/uInitrd.backup-working
+          #   sudo ln -sf Image-${KERNEL_RELEASE}-radxa-zero3w /boot/Image
+          #   sudo ln -sf uInitrd-${KERNEL_RELEASE} /boot/uInitrd
+          #   sudo reboot
+          #
+          # Recovery from SD:
+          #   sudo ln -sf vmlinuz-6.1.115-vendor-rk35xx /mnt/emmc/boot/Image
+          #   sudo ln -sf uInitrd-6.1.115-vendor-rk35xx /mnt/emmc/boot/uInitrd
+          EOF
 
           dpkg-deb --build "${ROOT}" "${PACKAGE_NAME}_${KERNEL_RELEASE}-1_arm64.deb"
 
@@ -272,7 +364,7 @@ jobs:
 
       - name: Show package contents
         run: |
-          dpkg-deb -c artifacts/*.deb | head -120
+          dpkg-deb -c artifacts/*.deb | head -180
 
       - name: Show ccache stats
         if: always()
