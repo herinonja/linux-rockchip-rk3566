@@ -29,14 +29,16 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
-            git wget ca-certificates xz-utils patch rsync dos2unix \
+            git wget curl ca-certificates xz-utils patch rsync \
             bc bison flex build-essential \
             libssl-dev libelf-dev libncurses-dev \
             dwarves pahole ccache python3 \
-            cpio lz4 zstd kmod fakeroot dpkg-dev debhelper dkms \
+            cpio lz4 zstd kmod fakeroot dpkg-dev \
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu \
-            crossbuild-essential-arm64
+            crossbuild-essential-arm64 \
+            devscripts debhelper dh-make lintian \
+            dkms dh-dkms dos2unix
 
       - name: Restore ccache
         uses: actions/cache@v4
@@ -90,20 +92,17 @@ jobs:
 
           make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} defconfig
 
-          # Core platform
           scripts/config --enable ARM64
           scripts/config --enable ARCH_ROCKCHIP
           scripts/config --enable OF
           scripts/config --enable OF_OVERLAY
 
-          # Initramfs support
           scripts/config --enable BLK_DEV_INITRD
           scripts/config --enable RD_GZIP
           scripts/config --enable RD_XZ
           scripts/config --enable RD_LZ4
           scripts/config --enable RD_ZSTD
 
-          # Filesystems
           scripts/config --enable EXT4_FS
           scripts/config --enable BTRFS_FS
           scripts/config --enable VFAT_FS
@@ -112,7 +111,6 @@ jobs:
           scripts/config --enable DEVTMPFS
           scripts/config --enable DEVTMPFS_MOUNT
 
-          # eMMC / SD / SDIO
           scripts/config --enable MMC
           scripts/config --enable MMC_BLOCK
           scripts/config --enable MMC_DW
@@ -122,7 +120,6 @@ jobs:
           scripts/config --enable MMC_SDHCI_OF_ARASAN
           scripts/config --enable PHY_ROCKCHIP_EMMC
 
-          # USB / OTG / gadget
           scripts/config --enable USB
           scripts/config --enable USB_XHCI_HCD
           scripts/config --enable USB_DWC3
@@ -135,7 +132,6 @@ jobs:
           scripts/config --enable PHY_ROCKCHIP_TYPEC
           scripts/config --enable PHY_ROCKCHIP_NANENG_COMBO_PHY
 
-          # Networking
           scripts/config --enable NET
           scripts/config --enable INET
           scripts/config --enable ETHERNET
@@ -143,7 +139,6 @@ jobs:
           scripts/config --enable DWMAC_ROCKCHIP
           scripts/config --enable PHYLIB
 
-          # WiFi / Bluetooth framework for AIC8800 SDIO DKMS
           scripts/config --module CFG80211
           scripts/config --module MAC80211
           scripts/config --module RFKILL
@@ -153,7 +148,6 @@ jobs:
           scripts/config --module BT_HCIUART_3WIRE
           scripts/config --module BT_HCIBTUSB
 
-          # AP / NAT / routing
           scripts/config --module NF_CONNTRACK
           scripts/config --module NF_NAT
           scripts/config --module IP_NF_IPTABLES
@@ -164,7 +158,6 @@ jobs:
           scripts/config --module BRIDGE
           scripts/config --module BRIDGE_NETFILTER
 
-          # DRM / GPU / HDMI
           scripts/config --enable DRM
           scripts/config --enable DRM_KMS_HELPER
           scripts/config --enable DRM_GEM_SHMEM_HELPER
@@ -175,13 +168,11 @@ jobs:
           scripts/config --module DRM_PANFROST
           scripts/config --module DRM_PANTHOR
 
-          # Media / VPU
           scripts/config --enable MEDIA_SUPPORT
           scripts/config --module VIDEO_HANTRO
           scripts/config --module VIDEO_ROCKCHIP_VDEC
           scripts/config --module VIDEO_ROCKCHIP_RGA
 
-          # Audio
           scripts/config --enable SND
           scripts/config --enable SND_SOC
           scripts/config --enable SND_SOC_ROCKCHIP
@@ -189,7 +180,6 @@ jobs:
           scripts/config --enable SND_AUDIO_GRAPH_CARD
           scripts/config --module SND_USB_AUDIO
 
-          # Reduce irrelevant firmware warnings
           scripts/config --disable MSCC_PHY
           scripts/config --disable USB_XHCI_RCAR
           scripts/config --disable USB_XHCI_TEGRA
