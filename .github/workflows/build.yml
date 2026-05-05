@@ -217,6 +217,8 @@ jobs:
         run: |
           test -f "linux-7.0.3/arch/arm64/boot/Image"
           test -f "linux-7.0.3/.config"
+          test -f "linux-7.0.3/Module.symvers"
+          test -f "linux-7.0.3/modules.order"
           test -f "linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}"
 
       - name: Install modules to staging
@@ -276,16 +278,48 @@ jobs:
           Priority: optional
           Architecture: arm64
           Maintainer: herinonja
-          Depends: build-essential, bc, bison, flex, libssl-dev, libelf-dev
+          Depends: build-essential, bc, bison, flex, libssl-dev, libelf-dev, make, gcc, dwarves
           Description: Kernel headers for Radxa Zero 3W RK3566
            Provides headers for external modules and DKMS.
+           The postinst prepares native build scripts on the target device.
           EOF
 
           sed -i "s|__HEADERS_PACKAGE__|${HEADERS_PACKAGE}|g" headers-pkg/DEBIAN/control
           sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" headers-pkg/DEBIAN/control
 
+          cat <<'EOF' > headers-pkg/DEBIAN/postinst
+          #!/bin/sh
+          set -e
+
+          KERNEL_RELEASE="__KERNEL_RELEASE__"
+          HDR="/usr/src/linux-headers-${KERNEL_RELEASE}"
+
+          if [ -d "${HDR}" ]; then
+            echo "Preparing native kernel header scripts for ${KERNEL_RELEASE}..."
+            cd "${HDR}"
+
+            rm -f scripts/basic/fixdep || true
+            rm -f scripts/mod/modpost || true
+            rm -f scripts/genksyms/genksyms || true
+            rm -f scripts/kallsyms || true
+            rm -f scripts/sorttable || true
+            rm -f scripts/asn1_compiler || true
+
+            make ARCH=arm64 scripts modules_prepare || true
+          fi
+
+          exit 0
+          EOF
+
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" headers-pkg/DEBIAN/postinst
+          chmod 755 headers-pkg/DEBIAN/postinst
+
           cat <<'EOF' > "headers-pkg/usr/share/doc/${HEADERS_PACKAGE}/README.headers"
           Kernel headers for external modules and DKMS.
+
+          If DKMS reports "scripts/basic/fixdep: Exec format error", run:
+            cd /usr/src/linux-headers-$(uname -r)
+            sudo make ARCH=arm64 scripts modules_prepare
           EOF
 
           dpkg-deb --build headers-pkg \
@@ -379,6 +413,10 @@ jobs:
             else
               echo "fdtfile=rockchip/${DTB_NAME}" >> /boot/armbianEnv.txt
             fi
+          fi
+
+          if command -v dkms >/dev/null 2>&1; then
+            dkms autoinstall -k "${KERNEL_RELEASE}" || true
           fi
 
           echo "Kernel activated."
