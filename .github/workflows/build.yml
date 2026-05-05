@@ -1,7 +1,8 @@
-name: Build Radxa Zero 3W RK3566 Kernel
+name: Build Radxa Zero 3W RK3566 Kernel DEB
 
 on:
   workflow_dispatch:
+
   push:
     paths:
       - ".github/workflows/build.yml"
@@ -13,83 +14,86 @@ jobs:
     env:
       ARCH: arm64
       CROSS_COMPILE: aarch64-linux-gnu-
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 5G
       KERNEL_VERSION: "7.0.3"
       TARGET_DTB: "rk3566-radxa-zero-3w.dtb"
+      PACKAGE_NAME: "linux-image-radxa-zero3w-rk3566"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 5G
 
     steps:
-      - name: Checkout workflow repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
-            git wget ca-certificates xz-utils patch \
+            git wget ca-certificates xz-utils patch rsync \
             bc bison flex build-essential \
             libssl-dev libelf-dev libncurses-dev \
-            dwarves pahole ccache rsync python3 \
-            cpio lz4 zstd kmod \
-            crossbuild-essential-arm64 \
+            dwarves pahole ccache python3 \
+            cpio lz4 zstd kmod fakeroot dpkg-dev \
             gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu
+            binutils-aarch64-linux-gnu \
+            crossbuild-essential-arm64
 
       - name: Restore ccache
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: ccache-radxa-zero3w-${{ runner.os }}-${{ github.sha }}
+          key: ccache-rk3566-${{ runner.os }}-${{ github.ref_name }}
           restore-keys: |
-            ccache-radxa-zero3w-${{ runner.os }}-
+            ccache-rk3566-${{ runner.os }}-
 
       - name: Prepare ccache
         run: |
           ccache --set-config=max_size=5G
           ccache --zero-stats
-          mkdir -p ~/.local/bin
-          ln -sf /usr/bin/ccache ~/.local/bin/aarch64-linux-gnu-gcc
-          ln -sf /usr/bin/ccache ~/.local/bin/aarch64-linux-gnu-g++
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Clone linux-rockchip v7.0.3
+      - name: Clone linux-rockchip patches
         run: |
-          git clone --branch v7.0.3 --depth 1 https://github.com/inindev/linux-rockchip.git linux-rockchip
+          git clone --branch v7.0.3 --depth 1 \
+            https://github.com/inindev/linux-rockchip.git linux-rockchip
 
-      - name: Download Linux 7.0.3 source
+      - name: Download Linux source
         run: |
           wget https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.0.3.tar.xz
           tar -xf linux-7.0.3.tar.xz
 
-      - name: Apply linux-rockchip patches
+      - name: Apply patches
         run: |
           cd linux-7.0.3
-          PATCHES=$(find ../linux-rockchip/patches -type f | sort)
+
+          PATCH_DIR="../linux-rockchip/patches"
+
+          if [ ! -d "$PATCH_DIR" ]; then
+            echo "Patch directory not found: $PATCH_DIR"
+            exit 1
+          fi
+
+          PATCHES=$(find "$PATCH_DIR" -type f \( -name "*.patch" -o -name "*.diff" \) | sort)
 
           if [ -z "$PATCHES" ]; then
-            echo "No patch files found."
+            echo "No patch files found in $PATCH_DIR"
             exit 1
           fi
 
           for p in $PATCHES; do
-            echo "Applying $p"
+            echo "Applying patch: $p"
             patch -p1 < "$p"
           done
 
-      - name: Configure kernel for Radxa Zero 3W RK3566
+      - name: Configure kernel
         run: |
           cd linux-7.0.3
 
-          # Base ARM64 config
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+          make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} defconfig
 
-          # Rockchip platform
           scripts/config --enable ARCH_ROCKCHIP
           scripts/config --enable ARM64
           scripts/config --enable OF
           scripts/config --enable OF_OVERLAY
 
-          # DRM / display stack
           scripts/config --enable DRM
           scripts/config --enable DRM_KMS_HELPER
           scripts/config --enable DRM_GEM_SHMEM_HELPER
@@ -98,101 +102,186 @@ jobs:
           scripts/config --enable ROCKCHIP_DW_HDMI
           scripts/config --enable PHY_ROCKCHIP_INNO_HDMI
 
-          # Mali GPU
-          # RK3566 / Mali G52 = Panfrost
           scripts/config --module DRM_PANFROST
-
-          # Optional: Mali CSF/Valhall newer GPUs
           scripts/config --module DRM_PANTHOR
 
-          # Media / VPU helpers for Kodi-related stack
           scripts/config --enable MEDIA_SUPPORT
           scripts/config --module VIDEO_HANTRO
           scripts/config --module VIDEO_ROCKCHIP_VDEC
           scripts/config --module VIDEO_ROCKCHIP_RGA
 
-          # Filesystems usually useful on Armbian/DietPi
           scripts/config --enable EXT4_FS
           scripts/config --enable BTRFS_FS
           scripts/config --enable VFAT_FS
           scripts/config --enable EXFAT_FS
 
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} olddefconfig
 
-      - name: Build kernel Image modules dtbs
+      - name: Build kernel Image modules and target DTB
         run: |
           cd linux-7.0.3
 
-          make -j$(nproc) \
+          make -j"$(nproc)" \
             ARCH=arm64 \
             CROSS_COMPILE="ccache aarch64-linux-gnu-" \
             Image modules dtbs
 
-      - name: Verify Radxa Zero 3W DTB exists
+      - name: Get kernel release
         run: |
+          cd linux-7.0.3
+          KREL=$(make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} kernelrelease)
+          echo "KERNEL_RELEASE=$KREL" >> "$GITHUB_ENV"
+          echo "Kernel release: $KREL"
+
+      - name: Verify required outputs
+        run: |
+          test -f "linux-7.0.3/arch/arm64/boot/Image"
+
           DTB_PATH="linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}"
 
           if [ ! -f "$DTB_PATH" ]; then
             echo "Missing DTB: $DTB_PATH"
-            echo "Available rk3566 DTBs:"
+            echo "Available RK3566 DTBs:"
             find linux-7.0.3/arch/arm64/boot/dts/rockchip -name "rk3566*.dtb" | sort
             exit 1
           fi
 
-          echo "Found target DTB: $DTB_PATH"
-
-      - name: Install modules to staging
+      - name: Install modules to package root
         run: |
+          rm -rf pkgroot
+          mkdir -p pkgroot
+
           cd linux-7.0.3
 
           make ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            INSTALL_MOD_PATH=${{ github.workspace }}/modules-staging \
+            CROSS_COMPILE=${CROSS_COMPILE} \
+            INSTALL_MOD_PATH="${{ github.workspace }}/pkgroot" \
             modules_install
 
-      - name: Package Radxa Zero 3W kernel artifact
+      - name: Create minimal Debian package
         run: |
-          mkdir -p artifacts/boot/dtb/rockchip
-          mkdir -p artifacts/lib
-
-          cp linux-7.0.3/arch/arm64/boot/Image artifacts/boot/Image-7.0.3-radxa-zero3w
-          cp linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB} artifacts/boot/dtb/rockchip/
-          cp -r modules-staging/lib/modules artifacts/lib/
-
-          cat > artifacts/install-radxa-zero3w.sh <<'EOF'
-          #!/usr/bin/env bash
           set -euo pipefail
 
-          echo "Installing kernel Image..."
-          sudo cp boot/Image-7.0.3-radxa-zero3w /boot/
+          PKGDIR="deb-pkg"
+          ROOT="${PKGDIR}/root"
+          DEBIAN="${ROOT}/DEBIAN"
 
-          echo "Installing Radxa Zero 3W DTB..."
-          sudo mkdir -p /boot/dtb/rockchip
-          sudo cp boot/dtb/rockchip/rk3566-radxa-zero-3w.dtb /boot/dtb/rockchip/
+          rm -rf "${PKGDIR}"
+          mkdir -p "${DEBIAN}"
+          mkdir -p "${ROOT}/boot/dtb/rockchip"
+          mkdir -p "${ROOT}/usr/share/doc/${PACKAGE_NAME}"
 
-          echo "Installing modules..."
-          sudo cp -a lib/modules/* /lib/modules/
+          IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
 
-          echo "Done."
-          echo "Now adapt /boot/armbianEnv.txt or your bootloader to use:"
-          echo "  Image-7.0.3-radxa-zero3w"
-          echo "  dtb/rockchip/rk3566-radxa-zero-3w.dtb"
+          cp "linux-7.0.3/arch/arm64/boot/Image" \
+            "${ROOT}/boot/${IMAGE_NAME}"
+
+          cp "linux-7.0.3/arch/arm64/boot/dts/rockchip/${TARGET_DTB}" \
+            "${ROOT}/boot/dtb/rockchip/${TARGET_DTB}"
+
+          mkdir -p "${ROOT}/lib"
+          cp -a "pkgroot/lib/modules" "${ROOT}/lib/modules"
+
+          cat > "${DEBIAN}/control" <<EOF
+          Package: ${PACKAGE_NAME}
+          Version: ${KERNEL_RELEASE}-1
+          Section: kernel
+          Priority: optional
+          Architecture: arm64
+          Maintainer: herinonja
+          Description: Minimal Linux kernel package for Radxa Zero 3W RK3566
+           Contains only the kernel Image, Radxa Zero 3W RK3566 DTB,
+           and matching kernel modules.
           EOF
 
-          chmod +x artifacts/install-radxa-zero3w.sh
+          cat > "${DEBIAN}/postinst" <<'EOF'
+          #!/bin/sh
+          set -e
 
-          tar -C artifacts -czf radxa-zero3w-kernel-7.0.3-arm64.tar.gz .
+          KERNEL_RELEASE="__KERNEL_RELEASE__"
+          IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
+          DTB_NAME="rk3566-radxa-zero-3w.dtb"
 
-          ls -lh radxa-zero3w-kernel-7.0.3-arm64.tar.gz
+          echo "Running depmod for ${KERNEL_RELEASE}..."
+          depmod "${KERNEL_RELEASE}" || true
+
+          if command -v update-initramfs >/dev/null 2>&1; then
+            echo "Generating initramfs for ${KERNEL_RELEASE}..."
+            update-initramfs -c -k "${KERNEL_RELEASE}" || true
+          fi
+
+          if [ -f /boot/armbianEnv.txt ]; then
+            echo "Updating /boot/armbianEnv.txt..."
+            cp -a /boot/armbianEnv.txt "/boot/armbianEnv.txt.backup.${KERNEL_RELEASE}" || true
+
+            if grep -q '^image=' /boot/armbianEnv.txt; then
+              sed -i "s|^image=.*|image=${IMAGE_NAME}|" /boot/armbianEnv.txt
+            else
+              echo "image=${IMAGE_NAME}" >> /boot/armbianEnv.txt
+            fi
+
+            if grep -q '^fdtfile=' /boot/armbianEnv.txt; then
+              sed -i "s|^fdtfile=.*|fdtfile=rockchip/${DTB_NAME}|" /boot/armbianEnv.txt
+            else
+              echo "fdtfile=rockchip/${DTB_NAME}" >> /boot/armbianEnv.txt
+            fi
+          else
+            echo "WARNING: /boot/armbianEnv.txt not found."
+            echo "Set manually:"
+            echo "  image=${IMAGE_NAME}"
+            echo "  fdtfile=rockchip/${DTB_NAME}"
+          fi
+
+          echo "Kernel installed."
+          echo "Reboot with: sudo reboot"
+          EOF
+
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" "${DEBIAN}/postinst"
+          chmod 755 "${DEBIAN}/postinst"
+
+          cat > "${DEBIAN}/postrm" <<'EOF'
+          #!/bin/sh
+          set -e
+
+          KERNEL_RELEASE="__KERNEL_RELEASE__"
+
+          if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+            if command -v update-initramfs >/dev/null 2>&1; then
+              update-initramfs -d -k "${KERNEL_RELEASE}" || true
+            fi
+          fi
+
+          exit 0
+          EOF
+
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" "${DEBIAN}/postrm"
+          chmod 755 "${DEBIAN}/postrm"
+
+          find "${ROOT}/lib/modules/${KERNEL_RELEASE}" -name build -type l -delete || true
+          find "${ROOT}/lib/modules/${KERNEL_RELEASE}" -name source -type l -delete || true
+
+          dpkg-deb --build "${ROOT}" "${PACKAGE_NAME}_${KERNEL_RELEASE}-1_arm64.deb"
+
+          mkdir -p artifacts
+          mv "${PACKAGE_NAME}_${KERNEL_RELEASE}-1_arm64.deb" artifacts/
+          cd artifacts
+          sha256sum *.deb > SHA256SUMS
+
+          echo "Generated artifacts:"
+          ls -lh
+
+      - name: Show package contents
+        run: |
+          dpkg-deb -c artifacts/*.deb | head -120
 
       - name: Show ccache stats
         if: always()
         run: |
           ccache --show-stats || true
 
-      - name: Upload artifact
+      - name: Upload DEB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: radxa-zero3w-kernel-7.0.3-arm64
-          path: radxa-zero3w-kernel-7.0.3-arm64.tar.gz
+          name: radxa-zero3w-rk3566-kernel-deb
+          path: artifacts/
           retention-days: 7
