@@ -15,7 +15,7 @@ jobs:
       ARCH: arm64
       CROSS_COMPILE: aarch64-linux-gnu-
       KERNEL_VERSION: "7.0.3"
-      TARGET_DTB: "rk3566-radxa-zero3.dtb"
+      TARGET_DTB: "rk3566-radxa-zero-3w.dtb"
       PACKAGE_NAME: "linux-image-radxa-zero3w-rk3566"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
@@ -262,7 +262,7 @@ jobs:
           Architecture: arm64
           Maintainer: herinonja
           Description: Minimal Linux kernel package for Radxa Zero 3W RK3566
-           Contains only the kernel Image, kernel config, Radxa Zero 3 RK3566 DTB,
+           Contains only the kernel Image, kernel config, Radxa Zero 3W mainline RK3566 DTB,
            and matching kernel modules.
            This package does not modify /boot/armbianEnv.txt.
           EOF
@@ -273,7 +273,7 @@ jobs:
 
           KERNEL_RELEASE="__KERNEL_RELEASE__"
           IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
-          DTB_NAME="rk3566-radxa-zero3.dtb"
+          DTB_NAME="rk3566-radxa-zero-3w.dtb"
 
           echo "Installed kernel files:"
           echo "  /boot/${IMAGE_NAME}"
@@ -293,18 +293,25 @@ jobs:
           echo "IMPORTANT:"
           echo "This package did NOT modify /boot/armbianEnv.txt."
           echo
-          echo "Your current working Armbian setup likely uses:"
+          echo "Your current working vendor Armbian setup uses:"
           echo "  /boot/Image -> vmlinuz-*"
           echo "  /boot/uInitrd -> uInitrd-*"
+          echo "  fdtfile=rockchip/rk3566-radxa-zero3.dtb"
+          echo
+          echo "This mainline package installed:"
           echo "  fdtfile=rockchip/${DTB_NAME}"
           echo
           echo "To test this kernel manually, backup current symlinks first:"
           echo "  sudo cp -a /boot/Image /boot/Image.backup-working"
           echo "  sudo cp -a /boot/uInitrd /boot/uInitrd.backup-working"
+          echo "  sudo cp -a /boot/armbianEnv.txt /boot/armbianEnv.txt.backup-working"
           echo
           echo "Then switch symlinks:"
           echo "  sudo ln -sf ${IMAGE_NAME} /boot/Image"
           echo "  sudo ln -sf uInitrd-${KERNEL_RELEASE} /boot/uInitrd"
+          echo
+          echo "For mainline DTB testing, change only this line manually:"
+          echo "  fdtfile=rockchip/${DTB_NAME}"
           echo
           echo "Do not change /boot/armbianEnv.txt unless necessary."
 
@@ -335,21 +342,28 @@ jobs:
           cat > "${ROOT}/usr/share/doc/${PACKAGE_NAME}/armbianEnv.example" <<EOF
           # Example only. Do NOT copy blindly.
           #
-          # Current known-good setup:
+          # Current known-good vendor setup:
           #   fdtfile=rockchip/rk3566-radxa-zero3.dtb
+          #
+          # Mainline DTB installed by this package:
+          #   fdtfile=rockchip/rk3566-radxa-zero-3w.dtb
           #
           # This package intentionally does NOT modify /boot/armbianEnv.txt.
           #
           # Manual test method:
           #   sudo cp -a /boot/Image /boot/Image.backup-working
           #   sudo cp -a /boot/uInitrd /boot/uInitrd.backup-working
+          #   sudo cp -a /boot/armbianEnv.txt /boot/armbianEnv.txt.backup-working
           #   sudo ln -sf Image-${KERNEL_RELEASE}-radxa-zero3w /boot/Image
           #   sudo ln -sf uInitrd-${KERNEL_RELEASE} /boot/uInitrd
-          #   sudo reboot
+          #
+          # Then edit /boot/armbianEnv.txt manually only if testing mainline DTB:
+          #   fdtfile=rockchip/rk3566-radxa-zero-3w.dtb
           #
           # Recovery from SD:
           #   sudo ln -sf vmlinuz-6.1.115-vendor-rk35xx /mnt/emmc/boot/Image
           #   sudo ln -sf uInitrd-6.1.115-vendor-rk35xx /mnt/emmc/boot/uInitrd
+          #   sudo cp -a /mnt/emmc/boot/armbianEnv.txt.backup-working /mnt/emmc/boot/armbianEnv.txt
           EOF
 
           dpkg-deb --build "${ROOT}" "${PACKAGE_NAME}_${KERNEL_RELEASE}-1_arm64.deb"
