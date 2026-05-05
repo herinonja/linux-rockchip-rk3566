@@ -1,4 +1,4 @@
-name: Build Radxa Zero 3W RK3566 Kernel
+name: Build Radxa Zero 3W RK3566 Kernel PRO DEB
 
 on:
   workflow_dispatch:
@@ -25,7 +25,9 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt update
+
           sudo apt install -y \
             git wget curl ca-certificates xz-utils patch rsync \
             bc bison flex build-essential \
@@ -35,7 +37,8 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             crossbuild-essential-arm64 \
             devscripts debhelper dh-make lintian \
-            dkms dh-dkms dos2unix dh-exec
+            dkms dh-dkms dos2unix dh-exec \
+            libc6:arm64 libgcc-s1:arm64
 
       - name: Prepare ccache
         run: |
@@ -55,6 +58,7 @@ jobs:
       - name: Apply patches
         run: |
           cd linux-7.0.3
+
           find ../linux-rockchip/patches -name "*.patch" | sort | while read -r patch_file; do
             echo "Applying ${patch_file}"
             patch -p1 < "${patch_file}"
@@ -67,11 +71,22 @@ jobs:
           make ARCH=arm64 CROSS_COMPILE="${CROSS_COMPILE}" defconfig
 
           scripts/config --enable ARCH_ROCKCHIP
+          scripts/config --enable OF
+          scripts/config --enable OF_OVERLAY
+
           scripts/config --enable BLK_DEV_INITRD
           scripts/config --enable RD_GZIP
           scripts/config --enable RD_XZ
           scripts/config --enable RD_LZ4
           scripts/config --enable RD_ZSTD
+
+          scripts/config --enable EXT4_FS
+          scripts/config --enable BTRFS_FS
+          scripts/config --enable VFAT_FS
+          scripts/config --enable EXFAT_FS
+          scripts/config --enable TMPFS
+          scripts/config --enable DEVTMPFS
+          scripts/config --enable DEVTMPFS_MOUNT
 
           scripts/config --enable MMC
           scripts/config --enable MMC_BLOCK
@@ -80,6 +95,26 @@ jobs:
           scripts/config --enable MMC_SDHCI
           scripts/config --enable MMC_SDHCI_PLTFM
           scripts/config --enable MMC_SDHCI_OF_ARASAN
+          scripts/config --enable PHY_ROCKCHIP_EMMC
+
+          scripts/config --enable USB
+          scripts/config --enable USB_XHCI_HCD
+          scripts/config --enable USB_DWC3
+          scripts/config --enable USB_DWC3_OF_SIMPLE
+          scripts/config --enable USB_GADGET
+          scripts/config --enable USB_CONFIGFS
+          scripts/config --enable USB_CONFIGFS_ECM
+          scripts/config --enable USB_CONFIGFS_RNDIS
+          scripts/config --enable PHY_ROCKCHIP_INNO_USB2
+          scripts/config --enable PHY_ROCKCHIP_TYPEC
+          scripts/config --enable PHY_ROCKCHIP_NANENG_COMBO_PHY
+
+          scripts/config --enable NET
+          scripts/config --enable INET
+          scripts/config --enable ETHERNET
+          scripts/config --enable STMMAC_ETH
+          scripts/config --enable DWMAC_ROCKCHIP
+          scripts/config --enable PHYLIB
 
           scripts/config --module CFG80211
           scripts/config --module MAC80211
@@ -90,12 +125,24 @@ jobs:
 
           scripts/config --enable DRM
           scripts/config --enable DRM_ROCKCHIP
+          scripts/config --enable DRM_KMS_HELPER
+          scripts/config --enable DRM_GEM_SHMEM_HELPER
+          scripts/config --enable DRM_SCHED
           scripts/config --module DRM_PANFROST
 
           scripts/config --module NF_CONNTRACK
           scripts/config --module NF_NAT
           scripts/config --module IP_NF_IPTABLES
+          scripts/config --module IP_NF_FILTER
           scripts/config --module IP_NF_NAT
+          scripts/config --module NFT_CT
+          scripts/config --module NFT_NAT
+
+          scripts/config --enable SND
+          scripts/config --enable SND_SOC
+          scripts/config --enable SND_SOC_ROCKCHIP
+          scripts/config --enable SND_SIMPLE_CARD
+          scripts/config --module SND_USB_AUDIO
 
           scripts/config --disable MSCC_PHY
           scripts/config --disable USB_XHCI_RCAR
@@ -140,7 +187,7 @@ jobs:
           mkdir -p pkg/DEBIAN
           mkdir -p pkg/boot/dtb/rockchip
           mkdir -p pkg/lib
-          mkdir -p pkg/usr/share/doc/${IMAGE_PACKAGE}
+          mkdir -p "pkg/usr/share/doc/${IMAGE_PACKAGE}"
 
           IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
 
@@ -164,7 +211,7 @@ jobs:
           Maintainer: herinonja
           Depends: initramfs-tools
           Recommends: aic8800-firmware, aic8800-sdio-dkms
-          Description: Linux kernel image for Radxa Zero 3W RK3566
+          Description: PRO Linux kernel image for Radxa Zero 3W RK3566
            Contains kernel Image, config, Radxa Zero 3W mainline DTB,
            matching modules, and automatic boot activation.
           EOF
@@ -241,7 +288,7 @@ jobs:
           sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" pkg/DEBIAN/postrm
           chmod 755 pkg/DEBIAN/postrm
 
-          cat <<'EOF' > pkg/usr/share/doc/${IMAGE_PACKAGE}/README.radxa-zero3w
+          cat <<'EOF' > "pkg/usr/share/doc/${IMAGE_PACKAGE}/README.radxa-zero3w"
           This package automatically activates the custom kernel.
 
           It changes:
@@ -280,6 +327,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: radxa-zero3w-rk3566-kernel
+          name: radxa-zero3w-rk3566-kernel-pro-deb
           path: artifacts/
           retention-days: 7
