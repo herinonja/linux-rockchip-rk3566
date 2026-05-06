@@ -127,6 +127,17 @@ jobs:
           scripts/config --enable DEVTMPFS
           scripts/config --enable DEVTMPFS_MOUNT
 
+          scripts/config --enable CMA
+          scripts/config --enable DMA_CMA
+          scripts/config --enable CMA_SYSFS
+          scripts/config --set-val CMA_SIZE_MBYTES 512
+          scripts/config --set-val CMA_AREAS 20
+
+          scripts/config --enable DMABUF_HEAPS
+          scripts/config --enable DMABUF_HEAPS_SYSTEM
+          scripts/config --enable DMABUF_HEAPS_CMA
+          scripts/config --module UDMABUF
+
           scripts/config --enable MMC
           scripts/config --enable MMC_BLOCK
           scripts/config --enable MMC_DW
@@ -170,6 +181,17 @@ jobs:
           scripts/config --module DRM_PANFROST
           scripts/config --module DRM_PANTHOR
 
+          scripts/config --enable MEDIA_SUPPORT
+          scripts/config --enable MEDIA_CONTROLLER
+          scripts/config --enable VIDEO_DEV
+          scripts/config --enable V4L_MEM2MEM_DRIVERS
+          scripts/config --module VIDEO_HANTRO
+          scripts/config --module VIDEO_ROCKCHIP_VDEC
+          scripts/config --module VIDEO_ROCKCHIP_RGA
+          scripts/config --module V4L2_H264
+          scripts/config --module V4L2_VP9
+          scripts/config --module V4L2_JPEG
+
           scripts/config --module NF_CONNTRACK
           scripts/config --module NF_NAT
           scripts/config --module IP_NF_IPTABLES
@@ -179,11 +201,6 @@ jobs:
           scripts/config --module NFT_NAT
           scripts/config --module BRIDGE
           scripts/config --module BRIDGE_NETFILTER
-
-          scripts/config --enable MEDIA_SUPPORT
-          scripts/config --module VIDEO_HANTRO
-          scripts/config --module VIDEO_ROCKCHIP_VDEC
-          scripts/config --module VIDEO_ROCKCHIP_RGA
 
           scripts/config --enable SND
           scripts/config --enable SND_SOC
@@ -418,6 +435,12 @@ jobs:
             else
               echo "fdtfile=rockchip/${DTB_NAME}" >> /boot/armbianEnv.txt
             fi
+
+            if grep -q '^extraargs=' /boot/armbianEnv.txt; then
+              sed -i 's|^extraargs=.*|extraargs=cma=512M|' /boot/armbianEnv.txt
+            else
+              echo "extraargs=cma=512M" >> /boot/armbianEnv.txt
+            fi
           fi
 
           if command -v systemctl >/dev/null 2>&1; then
@@ -455,6 +478,7 @@ jobs:
             "if [ -f /boot/Image-__KERNEL_RELEASE__-radxa-zero3w ]; then ln -sf Image-__KERNEL_RELEASE__-radxa-zero3w /boot/Image; fi";
             "if [ -f /boot/uInitrd-__KERNEL_RELEASE__ ]; then ln -sf uInitrd-__KERNEL_RELEASE__ /boot/uInitrd; fi";
             "if [ -f /boot/armbianEnv.txt ]; then if grep -q '^fdtfile=' /boot/armbianEnv.txt; then sed -i 's|^fdtfile=.*|fdtfile=rockchip/__TARGET_DTB__|' /boot/armbianEnv.txt; else echo 'fdtfile=rockchip/__TARGET_DTB__' >> /boot/armbianEnv.txt; fi; fi";
+            "if [ -f /boot/armbianEnv.txt ]; then if grep -q '^extraargs=' /boot/armbianEnv.txt; then sed -i 's|^extraargs=.*|extraargs=cma=512M|' /boot/armbianEnv.txt; else echo 'extraargs=cma=512M' >> /boot/armbianEnv.txt; fi; fi";
           };
           EOF
 
@@ -519,6 +543,7 @@ jobs:
             /boot/Image
             /boot/uInitrd
             fdtfile in /boot/armbianEnv.txt
+            extraargs=cma=512M in /boot/armbianEnv.txt
 
           It also installs:
             /etc/apt/apt.conf.d/99-rk3566-custom-kernel
