@@ -2,7 +2,6 @@ name: Build Radxa Zero 3W RK3566 Kernel
 
 on:
   workflow_dispatch:
-
   push:
     paths:
       - ".github/workflows/build.yml"
@@ -111,6 +110,7 @@ jobs:
           scripts/config --enable ARCH_ROCKCHIP
           scripts/config --enable OF
           scripts/config --enable OF_OVERLAY
+          scripts/config --enable RELR
 
           scripts/config --enable BLK_DEV_INITRD
           scripts/config --enable RD_GZIP
@@ -415,10 +415,6 @@ jobs:
             fi
           fi
 
-          if command -v dkms >/dev/null 2>&1; then
-            dkms autoinstall -k "${KERNEL_RELEASE}" || true
-          fi
-
           echo "Kernel activated."
 
           exit 0
@@ -455,6 +451,9 @@ jobs:
             fdtfile in /boot/armbianEnv.txt
 
           Backup files are created before modification.
+
+          This package intentionally does not run global dkms autoinstall.
+          Install aic8800-sdio-dkms after linux-image and linux-headers.
           EOF
 
           dpkg-deb --build image-pkg \
