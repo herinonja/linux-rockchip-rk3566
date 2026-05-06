@@ -2,6 +2,7 @@ name: Build Radxa Zero 3W RK3566 Kernel
 
 on:
   workflow_dispatch:
+
   push:
     paths:
       - ".github/workflows/build.yml"
@@ -333,6 +334,9 @@ jobs:
           mkdir -p image-pkg/DEBIAN
           mkdir -p image-pkg/boot/dtb/rockchip
           mkdir -p image-pkg/lib
+          mkdir -p image-pkg/etc/apt/apt.conf.d
+          mkdir -p image-pkg/etc/systemd/system
+          mkdir -p image-pkg/usr/local/sbin
           mkdir -p "image-pkg/usr/share/doc/${IMAGE_PACKAGE}"
 
           IMAGE_NAME="Image-${KERNEL_RELEASE}-radxa-zero3w"
@@ -370,7 +374,8 @@ jobs:
           Recommends: __HEADERS_PACKAGE__ (= __KERNEL_RELEASE__-1), aic8800-firmware, aic8800-sdio-dkms
           Description: Linux kernel image for Radxa Zero 3W RK3566
            Contains kernel Image, config, Radxa Zero 3W mainline DTB,
-           matching modules, and automatic boot activation.
+           matching modules, boot protection against Armbian symlink changes,
+           and automatic boot activation.
           EOF
 
           sed -i "s|__IMAGE_PACKAGE__|${IMAGE_PACKAGE}|g" image-pkg/DEBIAN/control
@@ -403,7 +408,7 @@ jobs:
           [ -e /boot/uInitrd ] && cp -a /boot/uInitrd "/boot/uInitrd.backup-${BACKUP_TAG}" || true
           [ -f /boot/armbianEnv.txt ] && cp -a /boot/armbianEnv.txt "/boot/armbianEnv.txt.backup-${BACKUP_TAG}" || true
 
-          echo "Activating new kernel automatically..."
+          echo "Activating custom kernel..."
           ln -sf "${IMAGE_NAME}" /boot/Image
           ln -sf "uInitrd-${KERNEL_RELEASE}" /boot/uInitrd
 
@@ -415,8 +420,11 @@ jobs:
             fi
           fi
 
-          echo "Kernel activated."
+          if command -v systemctl >/dev/null 2>&1; then
+            systemctl enable rk3566-remove-headers-after-boot.service >/dev/null 2>&1 || true
+          fi
 
+          echo "Kernel activated."
           exit 0
           EOF
 
@@ -442,6 +450,68 @@ jobs:
           sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" image-pkg/DEBIAN/postrm
           chmod 755 image-pkg/DEBIAN/postrm
 
+          cat <<'EOF' > image-pkg/etc/apt/apt.conf.d/99-rk3566-custom-kernel
+          DPkg::Post-Invoke {
+            "if [ -f /boot/Image-__KERNEL_RELEASE__-radxa-zero3w ]; then ln -sf Image-__KERNEL_RELEASE__-radxa-zero3w /boot/Image; fi";
+            "if [ -f /boot/uInitrd-__KERNEL_RELEASE__ ]; then ln -sf uInitrd-__KERNEL_RELEASE__ /boot/uInitrd; fi";
+            "if [ -f /boot/armbianEnv.txt ]; then if grep -q '^fdtfile=' /boot/armbianEnv.txt; then sed -i 's|^fdtfile=.*|fdtfile=rockchip/__TARGET_DTB__|' /boot/armbianEnv.txt; else echo 'fdtfile=rockchip/__TARGET_DTB__' >> /boot/armbianEnv.txt; fi; fi";
+          };
+          EOF
+
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" image-pkg/etc/apt/apt.conf.d/99-rk3566-custom-kernel
+          sed -i "s|__TARGET_DTB__|${TARGET_DTB}|g" image-pkg/etc/apt/apt.conf.d/99-rk3566-custom-kernel
+
+          cat <<'EOF' > image-pkg/usr/local/sbin/rk3566-remove-headers-after-boot
+          #!/bin/sh
+          set -e
+
+          KERNEL_RELEASE="__KERNEL_RELEASE__"
+          HEADERS_PACKAGE="__HEADERS_PACKAGE__"
+
+          if [ "$(uname -r)" != "${KERNEL_RELEASE}" ]; then
+            echo "Not running ${KERNEL_RELEASE}; keeping headers."
+            exit 0
+          fi
+
+          if ! dpkg -s "${HEADERS_PACKAGE}" >/dev/null 2>&1; then
+            systemctl disable rk3566-remove-headers-after-boot.service >/dev/null 2>&1 || true
+            rm -f /etc/systemd/system/rk3566-remove-headers-after-boot.service
+            exit 0
+          fi
+
+          if command -v dkms >/dev/null 2>&1; then
+            if ! dkms status | grep -q "aic8800-sdio/.*${KERNEL_RELEASE}.*installed"; then
+              echo "AIC8800 DKMS is not installed for ${KERNEL_RELEASE}; keeping headers."
+              exit 0
+            fi
+          fi
+
+          echo "Removing ${HEADERS_PACKAGE} after successful boot on ${KERNEL_RELEASE}..."
+          dpkg --remove "${HEADERS_PACKAGE}" || true
+
+          systemctl disable rk3566-remove-headers-after-boot.service >/dev/null 2>&1 || true
+          rm -f /etc/systemd/system/rk3566-remove-headers-after-boot.service
+
+          exit 0
+          EOF
+
+          sed -i "s|__KERNEL_RELEASE__|${KERNEL_RELEASE}|g" image-pkg/usr/local/sbin/rk3566-remove-headers-after-boot
+          sed -i "s|__HEADERS_PACKAGE__|${HEADERS_PACKAGE}|g" image-pkg/usr/local/sbin/rk3566-remove-headers-after-boot
+          chmod 755 image-pkg/usr/local/sbin/rk3566-remove-headers-after-boot
+
+          cat <<'EOF' > image-pkg/etc/systemd/system/rk3566-remove-headers-after-boot.service
+          [Unit]
+          Description=Remove RK3566 custom kernel headers after successful boot
+          After=multi-user.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/rk3566-remove-headers-after-boot
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
           cat <<'EOF' > "image-pkg/usr/share/doc/${IMAGE_PACKAGE}/README.radxa-zero3w"
           This package automatically activates the custom kernel.
 
@@ -450,10 +520,18 @@ jobs:
             /boot/uInitrd
             fdtfile in /boot/armbianEnv.txt
 
-          Backup files are created before modification.
+          It also installs:
+            /etc/apt/apt.conf.d/99-rk3566-custom-kernel
 
-          This package intentionally does not run global dkms autoinstall.
-          Install aic8800-sdio-dkms after linux-image and linux-headers.
+          This keeps:
+            /boot/Image -> Image-7.0.3-radxa-zero3w
+            /boot/uInitrd -> uInitrd-7.0.3
+
+          even after apt upgrade regenerates Armbian initramfs files.
+
+          It also installs a one-shot systemd service that removes
+          linux-headers-radxa-zero3w-rk3566 after a successful boot
+          on the custom kernel, if AIC8800 DKMS is installed.
           EOF
 
           dpkg-deb --build image-pkg \
