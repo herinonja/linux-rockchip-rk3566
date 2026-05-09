@@ -22,4 +22,4 @@ DPkg::Post-Invoke {
 };
 EOF
 
-sudo reboot
+```sudo reboot```
