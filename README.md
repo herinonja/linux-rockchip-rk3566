@@ -2,7 +2,9 @@
 
 Custom Linux kernel build for **Rockchip RK3566 Radxa Zero 3W**.
 
-# Install :
+# Installation :
+
+sha256sum -c SHA256SUMS
 
 sudo dpkg -i linux-headers-radxa-zero3w-rk3566_7.0.3-1_arm64.deb
 
