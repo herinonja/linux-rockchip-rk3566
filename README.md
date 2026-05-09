@@ -16,12 +16,12 @@ sudo dpkg -i aic8800-firmware_*.deb
 
 sudo dpkg -i aic8800-sdio-dkms_*.deb
 
-"sudo tee /etc/apt/apt.conf.d/99-rk3566-custom-kernel >/dev/null <<'EOF'
+sudo tee /etc/apt/apt.conf.d/99-rk3566-custom-kernel >/dev/null <<'EOF'
 DPkg::Post-Invoke {
   "if [ -f /boot/Image-7.0.3-radxa-zero3w ]; then ln -sf Image-7.0.3-radxa-zero3w /boot/Image; fi";
   "if [ -f /boot/uInitrd-7.0.3 ]; then ln -sf uInitrd-7.0.3 /boot/uInitrd; fi";
 };
-EOF"
+EOF
 
 sudo reboot
 
