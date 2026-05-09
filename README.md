@@ -2,6 +2,7 @@
 Custom Linux kernel build for **Rockchip RK3566 Radxa Zero 3W**.
 
 # Installation :
+
 ```sudo apt install dwarves
 
 sha256sum -c SHA256SUMS
@@ -21,4 +22,4 @@ DPkg::Post-Invoke {
 };
 EOF
 
-sudo reboot```
+sudo reboot
