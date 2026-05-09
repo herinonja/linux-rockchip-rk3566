@@ -16,6 +16,15 @@ Custom Linux kernel build for **Rockchip RK3566 Radxa Zero 3W**.
 ```sudo dpkg -i aic8800-sdio-dkms_*.deb```
 
 ```
+sudo apt-mark hold \
+  linux-image-vendor-rk35xx \
+  linux-dtb-vendor-rk35xx \
+  linux-headers-vendor-rk35xx \
+  linux-image-vendor-rk35xx \
+  armbian-bsp-cli-radxa-zero3
+```
+
+```
 sudo tee /etc/apt/apt.conf.d/99-rk3566-custom-kernel >/dev/null <<'EOF'
 DPkg::Post-Invoke {
   "if [ -f /boot/Image-7.0.3-radxa-zero3w ]; then ln -sf Image-7.0.3-radxa-zero3w /boot/Image; fi";
